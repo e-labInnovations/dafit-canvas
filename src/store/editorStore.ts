@@ -4,10 +4,22 @@ import { defaultDummyN, type DummyStateN } from '../lib/renderFaceN'
 import {
   deleteLayer,
   emptyProject,
+  insertFaceNLayer,
+  insertTypeCLayer,
+  patchFaceNElement,
+  patchTypeCFaceData,
+  replaceAsset,
   reorderLayer,
   setLayerXY,
+  type AssetRef,
+  type FaceNInsertableKind,
 } from '../lib/projectIO'
 import type { EditorProject, WatchFormat } from '../types/face'
+import type { FaceDataEntry } from '../lib/dawft'
+import type { FaceN } from '../lib/faceN'
+
+type DecodedBitmap = { width: number; height: number; rgba: Uint8ClampedArray }
+type FNEl = FaceN['elements'][number]
 
 type EditorState = {
   /** null = no project yet (post-fresh-load, before user picks New or imports). */
@@ -28,6 +40,17 @@ type EditorState = {
   setLayerPosition: (idx: number, x: number, y: number) => void
   reorderLayer: (idx: number, direction: 'up' | 'down') => void
   deleteLayer: (idx: number) => void
+
+  // asset / insert (Phase 2)
+  replaceAssetAction: (
+    ref: AssetRef,
+    bitmap: DecodedBitmap,
+    requireDimMatch?: boolean,
+  ) => void
+  insertTypeC: (type: number, bitmap: DecodedBitmap) => void
+  insertFaceN: (kind: FaceNInsertableKind, bitmaps: DecodedBitmap[]) => void
+  patchFaceData: (idx: number, patch: Partial<FaceDataEntry>) => void
+  patchElement: (idx: number, patch: Partial<FNEl>) => void
 
   // dummy state
   patchDummy: <K extends keyof DummyStateN>(key: K, value: DummyStateN[K]) => void
@@ -64,7 +87,6 @@ export const useEditor = create<EditorState>((set) => ({
     set((state) => {
       if (!state.project) return state
       const next = reorderLayer(state.project, idx, direction)
-      // selection follows the moved layer to its new slot
       let newSel = state.selectedIdx
       if (newSel === idx) newSel = direction === 'up' ? idx + 1 : idx - 1
       return { project: next, selectedIdx: newSel }
@@ -78,6 +100,59 @@ export const useEditor = create<EditorState>((set) => ({
       if (newSel === idx) newSel = null
       else if (newSel !== null && newSel > idx) newSel = newSel - 1
       return { project: next, selectedIdx: newSel }
+    }),
+
+  replaceAssetAction: (ref, bitmap, requireDimMatch = true) =>
+    set((state) => {
+      if (!state.project) return state
+      try {
+        const next = replaceAsset(state.project, ref, bitmap, { requireDimMatch })
+        return { project: next, error: null }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    }),
+
+  insertTypeC: (type, bitmap) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      try {
+        const next = insertTypeCLayer(state.project, type, bitmap)
+        return {
+          project: next,
+          selectedIdx: next.header.dataCount - 1,
+          error: null,
+        }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    }),
+
+  insertFaceN: (kind, bitmaps) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'faceN') return state
+      try {
+        const next = insertFaceNLayer(state.project, kind, bitmaps)
+        return {
+          project: next,
+          selectedIdx: next.face.elements.length - 1,
+          error: null,
+        }
+      } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) }
+      }
+    }),
+
+  patchFaceData: (idx, patch) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      return { project: patchTypeCFaceData(state.project, idx, patch) }
+    }),
+
+  patchElement: (idx, patch) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'faceN') return state
+      return { project: patchFaceNElement(state.project, idx, patch) }
     }),
 
   patchDummy: (key, value) =>

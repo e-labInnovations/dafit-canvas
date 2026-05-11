@@ -4,6 +4,7 @@
 import JSZip from 'jszip'
 import { decodeBmp } from './bmp'
 import {
+  blobCountForType,
   buildWatchfaceTxt,
   decodeFile,
   encodeBmpRgb565,
@@ -11,6 +12,7 @@ import {
   parseWatchfaceTxt,
   typeName,
   TYPE_C_HEADER_SIZE,
+  type Compression,
   type DecodedBlob,
   type FaceDataEntry,
   type FaceHeader,
@@ -693,3 +695,582 @@ export const rebuildFaceNPreview = (project: FaceNProject): FaceN | null => {
     return null
   }
 }
+
+// ===================================================================
+// Phase 2: asset enumeration + replace + insert
+// ===================================================================
+
+/** A pointer to a single replaceable image slot inside a project. The tag lets
+ *  callers patch the right field without re-walking the project tree. */
+export type AssetRef =
+  | { tag: 'typeC-blob'; blobIdx: number }
+  | { tag: 'faceN-preview' }
+  | { tag: 'faceN-digit'; setIdx: number; digitIdx: number }
+  | { tag: 'faceN-elem'; elementIdx: number; slotIdx: number }
+
+export type AssetView = {
+  ref: AssetRef
+  /** Short human-readable label (e.g. "0 (TIME_H1)", "Mon", "bg"). */
+  label: string
+  width: number
+  height: number
+  rgba: Uint8ClampedArray | null
+}
+
+const dayNameLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const batteryFillLabels = ['bg', 'fill', 'mask']
+
+/** Return every replaceable asset owned by the given layer. Empty for kinds
+ *  whose pixel data lives in a shared digit set (TimeNum, *Num). */
+export const listLayerAssets = (
+  project: EditorProject,
+  layerIdx: number,
+): AssetView[] => {
+  if (project.format === 'typeC') {
+    const fd = project.header.faceData[layerIdx]
+    if (!fd) return []
+    const count = blobCountForType(fd.type, project.header.animationFrames)
+    const out: AssetView[] = []
+    for (let i = 0; i < count; i++) {
+      const blobIdx = fd.idx + i
+      const blob = project.blobs[blobIdx]
+      out.push({
+        ref: { tag: 'typeC-blob', blobIdx },
+        label: `${blobIdx}${count > 1 ? ` (${i})` : ''}`,
+        width: blob?.width ?? 0,
+        height: blob?.height ?? 0,
+        rgba: blob?.rgba ?? null,
+      })
+    }
+    return out
+  }
+
+  const el = project.face.elements[layerIdx]
+  if (!el) return []
+  const mkRef = (slotIdx: number): AssetRef => ({
+    tag: 'faceN-elem',
+    elementIdx: layerIdx,
+    slotIdx,
+  })
+  switch (el.kind) {
+    case 'Image':
+      return [
+        {
+          ref: mkRef(0),
+          label: 'image',
+          width: el.img.width,
+          height: el.img.height,
+          rgba: el.img.rgba,
+        },
+      ]
+    case 'DayName':
+      return el.imgs.map((img, i) => ({
+        ref: mkRef(i),
+        label: dayNameLabels[i] ?? String(i),
+        width: img.width,
+        height: img.height,
+        rgba: img.rgba,
+      }))
+    case 'BatteryFill':
+      return [el.bgImg, el.img1, el.img2].map((img, i) => ({
+        ref: mkRef(i),
+        label: batteryFillLabels[i] ?? String(i),
+        width: img.width,
+        height: img.height,
+        rgba: img.rgba,
+      }))
+    case 'TimeHand':
+      return [
+        {
+          ref: mkRef(0),
+          label: 'hand',
+          width: el.img.width,
+          height: el.img.height,
+          rgba: el.img.rgba,
+        },
+      ]
+    case 'BarDisplay':
+    case 'Weather':
+      return el.imgs.map((img, i) => ({
+        ref: mkRef(i),
+        label: String(i),
+        width: img.width,
+        height: img.height,
+        rgba: img.rgba,
+      }))
+    case 'Dash':
+      return [
+        {
+          ref: mkRef(0),
+          label: 'dash',
+          width: el.img.width,
+          height: el.img.height,
+          rgba: el.img.rgba,
+        },
+      ]
+    case 'TimeNum':
+    case 'HeartRateNum':
+    case 'StepsNum':
+    case 'KCalNum':
+    case 'DayNum':
+    case 'MonthNum':
+    case 'Unknown29':
+    case 'Unknown':
+      // These reference a shared digit set; no per-layer assets.
+      return []
+  }
+}
+
+// ---------- BMP file → DecodedBitmap helper ----------
+
+/** Read a BMP file from disk and decode to RGBA. Throws on non-BMP. */
+export const decodeBmpFile = async (file: File): Promise<DecodedBitmap> => {
+  const bytes = new Uint8Array(await file.arrayBuffer())
+  const bmp = decodeBmp(bytes)
+  return { width: bmp.width, height: bmp.height, rgba: bmp.rgba }
+}
+
+// ---------- asset replace ----------
+
+export type ReplaceOpts = {
+  /** If true, require the new BMP's dimensions to match the existing slot's
+   *  width/height. Set false when replacing an empty (w=h=0) slot. */
+  requireDimMatch: boolean
+}
+
+const buildEmptyDecodedBlob = (
+  index: number,
+  bitmap: DecodedBitmap,
+  compression: Compression,
+  type: number | null,
+  faceDataIdx: number | null,
+): DecodedBlob => ({
+  index,
+  faceDataIdx,
+  type,
+  typeName: type !== null ? typeName(type) : 'UNKNOWN',
+  width: bitmap.width,
+  height: bitmap.height,
+  compression,
+  rawSize: bitmap.width * bitmap.height * 2,
+  rgba: bitmap.rgba,
+  raw: new Uint8Array(0),
+})
+
+const requireMatch = (
+  existing: { width: number; height: number },
+  next: DecodedBitmap,
+  label: string,
+): void => {
+  if (existing.width === 0 || existing.height === 0) return
+  if (existing.width !== next.width || existing.height !== next.height) {
+    throw new Error(
+      `${label}: dimensions must match. Slot is ${existing.width}×${existing.height} but BMP is ${next.width}×${next.height}.`,
+    )
+  }
+}
+
+/** Replace the pixel data at an AssetRef with a new BMP. Resizes the slot to
+ *  the new bitmap's dimensions when the slot was previously empty (w=h=0);
+ *  otherwise (with `requireDimMatch: true`) enforces an exact match. */
+export const replaceAsset = (
+  project: EditorProject,
+  ref: AssetRef,
+  bitmap: DecodedBitmap,
+  opts: ReplaceOpts = { requireDimMatch: true },
+): EditorProject => {
+  if (project.format === 'typeC' && ref.tag === 'typeC-blob') {
+    const existing = project.blobs[ref.blobIdx]
+    if (existing && opts.requireDimMatch) {
+      requireMatch(
+        {
+          width: existing.width ?? 0,
+          height: existing.height ?? 0,
+        },
+        bitmap,
+        `blob ${ref.blobIdx}`,
+      )
+    }
+    const next = buildEmptyDecodedBlob(
+      ref.blobIdx,
+      bitmap,
+      existing?.compression ?? 'RLE_LINE',
+      existing?.type ?? null,
+      existing?.faceDataIdx ?? null,
+    )
+    const blobs = project.blobs.slice()
+    blobs[ref.blobIdx] = next
+    // Also patch the matching faceData width/height if the slot was empty.
+    let header = project.header
+    if (existing?.faceDataIdx != null) {
+      const faceData = header.faceData.map((fd, i) =>
+        i === existing.faceDataIdx && (fd.w === 0 || fd.h === 0)
+          ? { ...fd, w: bitmap.width, h: bitmap.height }
+          : fd,
+      )
+      header = { ...header, faceData }
+    }
+    return { ...project, header, blobs }
+  }
+
+  if (project.format === 'faceN') {
+    if (ref.tag === 'faceN-preview') {
+      const cur = project.face.preview
+      if (opts.requireDimMatch)
+        requireMatch({ width: cur.width, height: cur.height }, bitmap, 'preview')
+      return {
+        ...project,
+        face: {
+          ...project.face,
+          preview: { ...cur, width: bitmap.width, height: bitmap.height, rgba: bitmap.rgba },
+        },
+      }
+    }
+    if (ref.tag === 'faceN-digit') {
+      const set = project.face.digitSets[ref.setIdx]
+      if (!set) return project
+      const slot = set.digits[ref.digitIdx]
+      if (slot && opts.requireDimMatch)
+        requireMatch(
+          { width: slot.width, height: slot.height },
+          bitmap,
+          `digit ${ref.setIdx}/${ref.digitIdx}`,
+        )
+      const digits = set.digits.map((d, i) =>
+        i === ref.digitIdx
+          ? { ...d, width: bitmap.width, height: bitmap.height, rgba: bitmap.rgba }
+          : d,
+      )
+      const digitSets = project.face.digitSets.map((s, i) =>
+        i === ref.setIdx ? { ...s, digits } : s,
+      )
+      return { ...project, face: { ...project.face, digitSets } }
+    }
+    if (ref.tag === 'faceN-elem') {
+      const elements = project.face.elements.map((el, i) =>
+        i === ref.elementIdx ? patchElementAsset(el, ref.slotIdx, bitmap, opts) : el,
+      )
+      return { ...project, face: { ...project.face, elements } }
+    }
+  }
+
+  return project
+}
+
+const swapImgRef = (
+  cur: FaceN['preview'],
+  bmp: DecodedBitmap,
+  opts: ReplaceOpts,
+  label: string,
+): FaceN['preview'] => {
+  if (opts.requireDimMatch)
+    requireMatch({ width: cur.width, height: cur.height }, bmp, label)
+  return { ...cur, width: bmp.width, height: bmp.height, rgba: bmp.rgba }
+}
+
+const patchElementAsset = (
+  el: FNEl,
+  slotIdx: number,
+  bmp: DecodedBitmap,
+  opts: ReplaceOpts,
+): FNEl => {
+  switch (el.kind) {
+    case 'Image':
+      return slotIdx === 0
+        ? { ...el, img: swapImgRef(el.img, bmp, opts, 'image') }
+        : el
+    case 'DayName': {
+      const imgs = el.imgs.map((img, i) =>
+        i === slotIdx
+          ? swapImgRef(img, bmp, opts, `${dayNameLabels[i] ?? i}`)
+          : img,
+      )
+      return { ...el, imgs }
+    }
+    case 'BatteryFill': {
+      const labels = batteryFillLabels
+      if (slotIdx === 0) return { ...el, bgImg: swapImgRef(el.bgImg, bmp, opts, labels[0]) }
+      if (slotIdx === 1) return { ...el, img1: swapImgRef(el.img1, bmp, opts, labels[1]) }
+      if (slotIdx === 2) return { ...el, img2: swapImgRef(el.img2, bmp, opts, labels[2]) }
+      return el
+    }
+    case 'TimeHand':
+      return slotIdx === 0
+        ? { ...el, img: swapImgRef(el.img, bmp, opts, 'hand') }
+        : el
+    case 'BarDisplay':
+    case 'Weather': {
+      const imgs = el.imgs.map((img, i) =>
+        i === slotIdx ? swapImgRef(img, bmp, opts, String(i)) : img,
+      )
+      return { ...el, imgs }
+    }
+    case 'Dash':
+      return slotIdx === 0
+        ? { ...el, img: swapImgRef(el.img, bmp, opts, 'dash') }
+        : el
+    case 'TimeNum':
+    case 'HeartRateNum':
+    case 'StepsNum':
+    case 'KCalNum':
+    case 'DayNum':
+    case 'MonthNum':
+    case 'Unknown29':
+    case 'Unknown':
+      return el
+  }
+}
+
+// ---------- insert (simple kinds only — Phase 2) ----------
+
+/** Type C kinds we can insert in Phase 2. All consume exactly 1 blob, so the
+ *  user picks a single BMP and we wire it up. Digit-set kinds (10 blobs each)
+ *  are deferred to Phase 3's font generator. */
+export const TYPEC_INSERTABLE: { type: number; name: string }[] = [
+  { type: 0x01, name: 'BACKGROUND' },
+  { type: 0x45, name: 'TIME_AM' },
+  { type: 0x46, name: 'TIME_PM' },
+  { type: 0x71, name: 'STEPS_LOGO' },
+  { type: 0x81, name: 'HR_LOGO' },
+  { type: 0x91, name: 'KCAL_LOGO' },
+  { type: 0xa1, name: 'DIST_LOGO' },
+  { type: 0xa5, name: 'DIST_KM' },
+  { type: 0xa6, name: 'DIST_MI' },
+  { type: 0xc0, name: 'BTLINK_UP' },
+  { type: 0xc1, name: 'BTLINK_DOWN' },
+  { type: 0xce, name: 'BATT_IMG' },
+  { type: 0xd1, name: 'BATT_IMG_C' },
+  { type: 0xf0, name: 'SEPERATOR' },
+  { type: 0xf1, name: 'HAND_HOUR' },
+  { type: 0xf2, name: 'HAND_MINUTE' },
+  { type: 0xf3, name: 'HAND_SEC' },
+  { type: 0xf4, name: 'HAND_PIN_UPPER' },
+  { type: 0xf5, name: 'HAND_PIN_LOWER' },
+]
+
+/** Insert a 1-blob Type C layer at the end of faceData, appending the bitmap
+ *  to the blob array. */
+export const insertTypeCLayer = (
+  project: TypeCProject,
+  type: number,
+  bitmap: DecodedBitmap,
+  position: { x: number; y: number } = { x: 0, y: 0 },
+): TypeCProject => {
+  const newBlobIdx = project.header.blobCount
+  const newFaceDataIdx = project.header.dataCount
+  if (newFaceDataIdx >= 39) {
+    throw new Error('Type C supports at most 39 faceData entries.')
+  }
+
+  const newBlob = buildEmptyDecodedBlob(
+    newBlobIdx,
+    bitmap,
+    'RLE_LINE',
+    type,
+    newFaceDataIdx,
+  )
+  const blobs = [...project.blobs, newBlob]
+
+  const faceData = project.header.faceData.slice()
+  faceData[newFaceDataIdx] = {
+    type,
+    idx: newBlobIdx,
+    x: position.x,
+    y: position.y,
+    w: bitmap.width,
+    h: bitmap.height,
+  }
+  return {
+    ...project,
+    header: {
+      ...project.header,
+      dataCount: project.header.dataCount + 1,
+      blobCount: project.header.blobCount + 1,
+      faceData,
+    },
+    blobs,
+  }
+}
+
+/** FaceN kinds we can insert in Phase 2. Each maps to a builder that takes the
+ *  user-provided BMPs and produces a fresh FNEl. */
+export type FaceNInsertableKind =
+  | 'Image'
+  | 'TimeHand-Hour'
+  | 'TimeHand-Minute'
+  | 'TimeHand-Second'
+  | 'Dash'
+  | 'DayName'
+  | 'BatteryFill'
+  | 'BarDisplay'
+  | 'Weather'
+
+export const FACEN_INSERTABLE: { kind: FaceNInsertableKind; label: string; imageCount: number }[] = [
+  { kind: 'Image', label: 'Image', imageCount: 1 },
+  { kind: 'TimeHand-Hour', label: 'Time hand (hour)', imageCount: 1 },
+  { kind: 'TimeHand-Minute', label: 'Time hand (minute)', imageCount: 1 },
+  { kind: 'TimeHand-Second', label: 'Time hand (second)', imageCount: 1 },
+  { kind: 'Dash', label: 'Dash', imageCount: 1 },
+  { kind: 'DayName', label: 'Day name (7 imgs)', imageCount: 7 },
+  { kind: 'BatteryFill', label: 'Battery fill (bg + fill + mask)', imageCount: 3 },
+  { kind: 'BarDisplay', label: 'Bar display', imageCount: 0 },
+  { kind: 'Weather', label: 'Weather', imageCount: 0 },
+]
+
+const emptyImgRef = (bmp?: DecodedBitmap): FaceN['preview'] => ({
+  offset: 0,
+  width: bmp?.width ?? 0,
+  height: bmp?.height ?? 0,
+  rawSize: bmp ? bmp.width * bmp.height * 3 : 0,
+  rgba: bmp?.rgba ?? null,
+})
+
+/** Insert a FaceN element at the end of `face.elements`. `bitmaps` provides one
+ *  bitmap per asset slot; pass an empty array (or fewer than required) to add
+ *  the element with blank slots that the user fills in via Replace. */
+export const insertFaceNLayer = (
+  project: FaceNProject,
+  kind: FaceNInsertableKind,
+  bitmaps: DecodedBitmap[],
+  position: { x: number; y: number } = { x: 0, y: 0 },
+): FaceNProject => {
+  const at = (i: number): DecodedBitmap | undefined => bitmaps[i]
+  let element: FNEl
+  switch (kind) {
+    case 'Image':
+      element = { kind: 'Image', eType: 0, x: position.x, y: position.y, img: emptyImgRef(at(0)) }
+      break
+    case 'TimeHand-Hour':
+    case 'TimeHand-Minute':
+    case 'TimeHand-Second': {
+      const hType = kind === 'TimeHand-Hour' ? 0 : kind === 'TimeHand-Minute' ? 1 : 2
+      element = {
+        kind: 'TimeHand',
+        eType: 10,
+        hType,
+        pivotX: 120,
+        pivotY: 120,
+        img: emptyImgRef(at(0)),
+        x: position.x,
+        y: position.y,
+      }
+      break
+    }
+    case 'Dash':
+      element = { kind: 'Dash', eType: 35, img: emptyImgRef(at(0)) }
+      break
+    case 'DayName':
+      element = {
+        kind: 'DayName',
+        eType: 4,
+        nType: 0,
+        x: position.x,
+        y: position.y,
+        imgs: Array.from({ length: 7 }, (_, i) => emptyImgRef(at(i))),
+      }
+      break
+    case 'BatteryFill':
+      element = {
+        kind: 'BatteryFill',
+        eType: 5,
+        x: position.x,
+        y: position.y,
+        bgImg: emptyImgRef(at(0)),
+        x1: 0,
+        y1: 0,
+        x2: 0,
+        y2: 0,
+        unknown0: 0,
+        unknown1: 0,
+        img1: emptyImgRef(at(1)),
+        img2: emptyImgRef(at(2)),
+      }
+      break
+    case 'BarDisplay': {
+      const count = Math.max(1, bitmaps.length || 5)
+      element = {
+        kind: 'BarDisplay',
+        eType: 18,
+        bType: 0,
+        count,
+        x: position.x,
+        y: position.y,
+        imgs: Array.from({ length: count }, (_, i) => emptyImgRef(at(i))),
+      }
+      break
+    }
+    case 'Weather': {
+      const count = Math.max(1, bitmaps.length || 10)
+      element = {
+        kind: 'Weather',
+        eType: 27,
+        count,
+        x: position.x,
+        y: position.y,
+        imgs: Array.from({ length: count }, (_, i) => emptyImgRef(at(i))),
+      }
+      break
+    }
+  }
+  return {
+    ...project,
+    face: {
+      ...project.face,
+      elements: [...project.face.elements, element],
+    },
+  }
+}
+
+// ---------- generic patch (kind-specific scalar fields) ----------
+
+/** Patch arbitrary scalar fields on the selected FaceN element. The patcher
+ *  has to know which fields are valid for each kind; callers should pass only
+ *  fields that exist on the discriminated subtype. */
+export const patchFaceNElement = (
+  project: FaceNProject,
+  idx: number,
+  patch: Partial<FNEl>,
+): FaceNProject => {
+  const elements = project.face.elements.map((el, i) => {
+    if (i !== idx) return el
+    return { ...el, ...patch } as FNEl
+  })
+  return { ...project, face: { ...project.face, elements } }
+}
+
+/** Patch arbitrary fields on a Type C faceData entry. */
+export const patchTypeCFaceData = (
+  project: TypeCProject,
+  idx: number,
+  patch: Partial<FaceDataEntry>,
+): TypeCProject => {
+  const faceData = project.header.faceData.map((fd, i) =>
+    i === idx ? { ...fd, ...patch } : fd,
+  )
+  return { ...project, header: { ...project.header, faceData } }
+}
+
+// ---------- digit-set inspection (read-only for Phase 2) ----------
+
+export type DigitSetView = {
+  setIdx: number
+  digits: AssetView[]
+}
+
+export const listDigitSets = (project: EditorProject): DigitSetView[] => {
+  if (project.format !== 'faceN') return []
+  return project.face.digitSets.map((set, setIdx) => ({
+    setIdx,
+    digits: set.digits.map((d, digitIdx) => ({
+      ref: { tag: 'faceN-digit', setIdx, digitIdx },
+      label: String(digitIdx),
+      width: d.width,
+      height: d.height,
+      rgba: d.rgba,
+    })),
+  }))
+}
+
+/** Suppress the "unused" warning on `swapImgRef` (TS6 lint catches the
+ *  intermediate helper). It's exported indirectly via patchElementAsset. */
+void swapImgRef

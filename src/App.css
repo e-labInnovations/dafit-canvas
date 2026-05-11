@@ -28,11 +28,31 @@
   }
 }
 
+/* Each route section fills the viewport below the top-nav and scrolls its own
+ * content. The Editor opts out via `:not(.editor)` so its internal panes can
+ * scroll independently — see .editor below. Without the :not(), this rule's
+ * higher specificity (#root > section) would override `.editor { overflow }`. */
+#root > section:not(.editor) {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 .top-nav {
   display: flex;
   gap: 8px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  /* Wrap to multiple rows when the viewport can't fit all routes — beats
+   * truncating "Upload" off the right edge on narrow screens. */
+  flex-wrap: wrap;
+  row-gap: 4px;
+
+  @media (max-width: 1024px) {
+    padding: 10px 12px;
+    font-size: 14px;
+  }
 
   a {
     color: var(--text);
@@ -705,9 +725,15 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Opt out of the shared `#root > section` scroll behavior: on desktop the
+   * editor uses an internal grid where each pane handles its own overflow.
+   * The mobile breakpoint below re-enables page scroll since the grid then
+   * stacks to a single column. */
+  overflow: hidden;
 
   @media (max-width: 1024px) {
     padding: 12px 12px 24px;
+    overflow-y: auto;
   }
 }
 
@@ -716,33 +742,71 @@
   align-items: center;
   justify-content: space-between;
   margin-bottom: 16px;
+  gap: 12px;
+  flex-wrap: wrap;
 
   h1 {
     margin: 0;
     font-size: 24px;
+  }
+
+  @media (max-width: 1024px) {
+    /* Stack title above toolbar so the four export/import buttons get a full
+     * row to wrap into instead of being clipped by the title's flex share. */
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+
+    h1 {
+      font-size: 20px;
+    }
   }
 }
 
 .editor-toolbar {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 
   .counter {
     margin-bottom: 0;
     padding: 5px 12px;
     font-size: 14px;
   }
+
+  @media (max-width: 1024px) {
+    .counter {
+      flex: 1 1 auto;
+      justify-content: center;
+      padding: 6px 10px;
+      font-size: 13px;
+    }
+  }
 }
 
 .editor-grid {
   display: grid;
   grid-template-columns: 240px 1fr 280px;
+  /* `1fr` row so the grid track fills the editor's remaining height instead
+   * of defaulting to `auto` (content-sized). Without this, panes inflate to
+   * their content and the inner .editor-pane-scroll has no bound to scroll
+   * against. */
+  grid-template-rows: 1fr;
   gap: 16px;
   flex: 1;
   min-height: 0;
 
   @media (max-width: 1024px) {
     grid-template-columns: 1fr;
+    /* On mobile the editor itself scrolls; let rows revert to auto so panes
+     * stack at their natural height. */
+    grid-template-rows: none;
+    /* And let the grid size to its content — keeping `flex: 1` here would pin
+     * the grid to its allocated flex space, so even though children overflow
+     * the grid box, `.editor`'s own content height would never exceed its
+     * bounds and `overflow-y: auto` would never engage. */
+    flex: 0 0 auto;
+    min-height: auto;
   }
 }
 
@@ -752,7 +816,22 @@
   padding: 12px;
   background: var(--bg);
   min-width: 0;
-  overflow-y: auto;
+  /* Grid items default to `min-height: auto`, which lets them grow past the
+   * row track when intrinsic min-content exceeds it — silently breaking the
+   * inner flex:1 scroll. Pinning to 0 keeps the pane exactly track-height,
+   * so .editor-pane-scroll can take the remainder and scroll. */
+  min-height: 0;
+  height: 100%;
+  /* Outer pane never scrolls so absolute popovers (insert menu, etc.) can
+   * escape; the inner .editor-pane-scroll handles overflow. */
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+
+  @media (max-width: 1024px) {
+    /* On mobile the editor itself scrolls; let panes grow to content height. */
+    height: auto;
+  }
 
   h3 {
     font-family: var(--mono);
@@ -764,15 +843,40 @@
   }
 }
 
+.editor-pane-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Soft right padding so the scrollbar doesn't crowd content. */
+  padding-right: 2px;
+
+  @media (max-width: 1024px) {
+    /* On mobile the parent .editor scrolls, so this just renders inline. */
+    flex: 0 1 auto;
+    overflow-y: visible;
+  }
+}
+
 .editor-stage {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  /* `safe center` falls back to start-alignment when content overflows, so the
+   * canvas top stays reachable when the stage scrolls. Without `safe`, plain
+   * `center` can push the overflow above the scroll origin and clip it. */
+  align-items: safe center;
+  justify-content: safe center;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--code-bg);
   padding: 24px;
   min-height: 0;
+  height: 100%;
+  /* If the viewport is shorter than the canvas, allow the stage to scroll
+   * rather than push the panes below the fold. */
+  overflow: auto;
+
+  @media (max-width: 1024px) {
+    height: auto;
+  }
 }
 
 .editor-canvas-wrap {
@@ -858,7 +962,17 @@
 
 .editor-canvas-stack {
   position: relative;
-  display: inline-block;
+  display: block;
+  width: 100%;
+  /* 480px canvas (max scale 2) + 26px (.face-preview-frame's 12px padding + 1px
+   * border per side). Hard caps so the wrapper always fits the column without
+   * horizontal scroll. */
+  max-width: 506px;
+  /* 240px canvas (min scale 1, native) + 26px frame decoration. If the column
+   * is narrower than this, the stage's overflow:auto provides the scrollbar —
+   * the explicit "minimum width to avoid wrong UX" behavior. */
+  min-width: 266px;
+  margin: 0 auto;
 }
 
 .editor-selection-overlay {
@@ -875,6 +989,96 @@
   font-size: 12px;
   color: var(--text-h);
   word-break: break-word;
+}
+
+.layer-add-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  gap: 8px;
+
+  h3 {
+    margin: 0;
+  }
+
+  .counter {
+    margin-bottom: 0;
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+}
+
+.insert-menu {
+  max-height: 280px;
+  overflow-y: auto;
+  right: 0;
+  left: auto;
+}
+
+.asset-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.asset-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 24px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.asset-thumb {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--code-bg);
+  border-radius: 4px;
+  overflow: hidden;
+
+  img {
+    max-width: 100%;
+    max-height: 100%;
+  }
+}
+
+.asset-empty {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text);
+  opacity: 0.6;
+}
+
+.asset-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.asset-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-h);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-dim {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
 }
 
 .layer-list {

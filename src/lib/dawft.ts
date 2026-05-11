@@ -162,7 +162,7 @@ export const parseHeader = (data: Uint8Array): FaceHeader => {
   }
 }
 
-const blobCountForType = (type: number, animationFrames: number): number => {
+export const blobCountForType = (type: number, animationFrames: number): number => {
   if (type >= 0xf6 && type <= 0xf8) return Math.max(1, animationFrames)
   return TYPE_TABLE[type]?.count ?? 1
 }
