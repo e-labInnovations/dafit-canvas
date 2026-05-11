@@ -1,28 +1,54 @@
 import { useEffect, useState } from 'react'
-import axios from 'axios'
 import {
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  ExternalLink,
+  Download,
   RotateCcw,
   Search,
+  Tag as TagIcon,
+  User,
   ZoomIn,
 } from 'lucide-react'
+import axios from 'axios'
 import FacePreviewModal from '../components/FacePreviewModal'
 import Loader from '../components/Loader'
 import {
-  DEFAULT_FACES_QUERY,
-  type FacesQuery,
-  type MoyoungFace,
-  type MoyoungFacesResponse,
+  errorMessage,
+  fetchLegacyFaces,
+  fetchV3List,
+  fetchV3Tags,
+} from '../lib/moyoung'
+import {
+  DEFAULT_V3_QUERY,
+  type V3ListFace,
+  type V3Query,
+  type V3Tag,
 } from '../types/moyoung'
 
 const MAX_PER_PAGE = 100
 
+/** Unified face row rendered by the grid. `file` may be empty (v3 list does
+ *  not return a file URL — the modal hits /v3/face-detail to resolve it). */
+type UnifiedFace = {
+  id: number
+  name: string | null
+  preview: string
+  file: string | null
+  uploader: string | null
+  download: number | null
+}
+
+type ListState = {
+  faces: UnifiedFace[]
+  total: number
+  /** Source surface — for the small badge above the grid. */
+  source: 'v2' | 'v3'
+}
+
 type FieldConfig = {
-  key: keyof FacesQuery
+  key: keyof Pick<V3Query, 'tpls' | 'fv' | 'per_page' | 'p'>
   label: string
   type?: 'text' | 'number'
   min?: number
@@ -42,10 +68,6 @@ const FIELDS: FieldConfig[] = [
   { key: 'p', label: 'p', type: 'number', min: 1 },
 ]
 
-const moyoung = axios.create({
-  baseURL: '/api/moyoung',
-})
-
 const toPositiveInt = (s: string, fallback: number): number => {
   const n = parseInt(s, 10)
   return Number.isFinite(n) && n > 0 ? n : fallback
@@ -56,42 +78,122 @@ const clampPerPage = (s: string): string => {
   return String(Math.min(MAX_PER_PAGE, n))
 }
 
+const fromV3 = (f: V3ListFace): UnifiedFace => ({
+  id: f.id,
+  name: f.name ?? null,
+  preview: f.preview,
+  // v3 list returns "https://qn-hscdn2.moyoung.com/" with no path — treat as missing.
+  file: f.file && /\.bin($|\?)/i.test(f.file) ? f.file : null,
+  uploader: f.uploader ?? null,
+  download: typeof f.download === 'number' ? f.download : null,
+})
+
+const fromV2 = (f: { id: number; preview: string; file: string }): UnifiedFace => ({
+  id: f.id,
+  name: null,
+  preview: f.preview,
+  file: f.file,
+  uploader: null,
+  download: null,
+})
+
+const formatCount = (n: number): string => {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return String(n)
+}
+
+// All-tag sentinel — when selected we fall back to /v2/faces since
+// /v3/list refuses tag_id=0 ("Tag is required").
+const ALL_TAG_ID = 0
+
 function WatchFaces() {
-  const [draft, setDraft] = useState<FacesQuery>(DEFAULT_FACES_QUERY)
-  const [applied, setApplied] = useState<FacesQuery>(DEFAULT_FACES_QUERY)
-  const [data, setData] = useState<MoyoungFacesResponse | null>(null)
+  const [draft, setDraft] = useState<V3Query>(DEFAULT_V3_QUERY)
+  const [applied, setApplied] = useState<V3Query>(DEFAULT_V3_QUERY)
+  const [tagId, setTagId] = useState<number>(ALL_TAG_ID)
+  const [tags, setTags] = useState<V3Tag[]>([])
+  const [tagsError, setTagsError] = useState<string | null>(null)
+  const [list, setList] = useState<ListState | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [selected, setSelected] = useState<MoyoungFace | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
 
+  // Fetch tag list once on mount (and on tpls/fv changes — different watches
+  // expose different tag sets).
+  useEffect(() => {
+    const controller = new AbortController()
+    fetchV3Tags(
+      {
+        tpls: applied.tpls,
+        fv: applied.fv,
+        lang: applied.lang,
+        tested: applied.tested,
+      },
+      controller.signal,
+    )
+      .then((next) => {
+        setTags(next)
+        setTagsError(null)
+      })
+      .catch((err: unknown) => {
+        if (axios.isCancel(err)) return
+        setTagsError(errorMessage(err))
+      })
+    return () => controller.abort()
+  }, [applied.tpls, applied.fv, applied.lang, applied.tested])
+
+  // Fetch the active face list whenever the applied query or selected tag
+  // changes. tag=0 → v2 catalog ("All"); any other tag → v3/list. We don't
+  // call setLoading/setError synchronously here — the caller (`requestFetch`)
+  // already flips loading=true before changing `applied`, and initial mount
+  // uses the useState default of `true`.
   useEffect(() => {
     const controller = new AbortController()
 
-    moyoung
-      .get<MoyoungFacesResponse>('/v2/faces', {
-        params: applied,
-        signal: controller.signal,
-      })
-      .then((res) => {
-        setData(res.data)
-        setError(null)
+    const run = async () => {
+      if (tagId === ALL_TAG_ID) {
+        const data = await fetchLegacyFaces(
+          {
+            tpls: applied.tpls,
+            fv: applied.fv,
+            per_page: applied.per_page,
+            p: applied.p,
+          },
+          controller.signal,
+        )
+        return {
+          faces: data.faces.map(fromV2),
+          total: data.total,
+          source: 'v2' as const,
+        }
+      }
+      const data = await fetchV3List(
+        { ...applied, tag_id: String(tagId) },
+        controller.signal,
+      )
+      return {
+        faces: data.data.faces.map(fromV3),
+        total: data.total,
+        source: 'v3' as const,
+      }
+    }
+
+    run()
+      .then((next) => {
+        setList(next)
         setLoading(false)
       })
       .catch((err: unknown) => {
         if (axios.isCancel(err)) return
-        const message = axios.isAxiosError(err)
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : String(err)
-        setError(message)
+        setError(errorMessage(err))
+        setList(null)
         setLoading(false)
       })
 
     return () => controller.abort()
-  }, [applied])
+  }, [applied, tagId])
 
-  const requestFetch = (next: FacesQuery) => {
+  const requestFetch = (next: V3Query) => {
     setLoading(true)
     setError(null)
     setApplied(next)
@@ -99,7 +201,7 @@ function WatchFaces() {
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    const cleaned: FacesQuery = {
+    const cleaned: V3Query = {
       ...draft,
       per_page: clampPerPage(draft.per_page),
       p: String(toPositiveInt(draft.p, 1)),
@@ -109,19 +211,28 @@ function WatchFaces() {
   }
 
   const onReset = () => {
-    setDraft(DEFAULT_FACES_QUERY)
-    requestFetch(DEFAULT_FACES_QUERY)
+    setDraft(DEFAULT_V3_QUERY)
+    setTagId(ALL_TAG_ID)
+    requestFetch(DEFAULT_V3_QUERY)
+  }
+
+  const onPickTag = (id: number) => {
+    // Reset to page 1 when switching tags.
+    setTagId(id)
+    const next: V3Query = { ...applied, p: '1' }
+    setDraft({ ...draft, p: '1' })
+    requestFetch(next)
   }
 
   const perPage = toPositiveInt(applied.per_page, 1)
   const currentPage = toPositiveInt(applied.p, 1)
-  const total = data?.total ?? 0
+  const total = list?.total ?? 0
   const totalPages = total > 0 ? Math.max(1, Math.ceil(total / perPage)) : 1
 
   const goToPage = (page: number) => {
     const bounded = Math.max(1, Math.min(totalPages, page))
     if (bounded === currentPage) return
-    const next: FacesQuery = { ...applied, p: String(bounded) }
+    const next: V3Query = { ...applied, p: String(bounded) }
     setDraft(next)
     requestFetch(next)
   }
@@ -133,10 +244,37 @@ function WatchFaces() {
     <section className="faces">
       <header className="faces-header">
         <h1>Watch faces</h1>
-        <p className="faces-endpoint">
-          GET <code>https://api.moyoung.com/v2/faces</code>
-        </p>
       </header>
+
+      <div className="faces-tags" role="tablist" aria-label="Face categories">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tagId === ALL_TAG_ID}
+          className={`faces-tag ${tagId === ALL_TAG_ID ? 'active' : ''}`}
+          onClick={() => onPickTag(ALL_TAG_ID)}
+        >
+          <TagIcon size={12} aria-hidden />
+          All
+        </button>
+        {tags.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tagId === t.id}
+            className={`faces-tag ${tagId === t.id ? 'active' : ''}`}
+            onClick={() => onPickTag(t.id)}
+          >
+            {t.tag_name}
+          </button>
+        ))}
+        {tagsError && (
+          <span className="faces-tags-error">
+            tag-list failed: {tagsError}
+          </span>
+        )}
+      </div>
 
       <form className="faces-form" onSubmit={onSubmit}>
         {FIELDS.map((field) => (
@@ -172,24 +310,24 @@ function WatchFaces() {
       )}
       {error && <p className="faces-error">Error: {error}</p>}
 
-      {data && !loading && (
+      {list && !loading && (
         <>
           <p className="faces-meta">
-            Page {currentPage} of {totalPages} · showing {data.count} of{' '}
-            {data.total}
+            Page {currentPage} of {totalPages} · showing {list.faces.length} of{' '}
+            {list.total}
           </p>
           <ul className="faces-grid">
-            {data.faces.map((face) => (
+            {list.faces.map((face) => (
               <li key={face.id} className="face-card">
                 <button
                   type="button"
                   className="face-thumb"
-                  onClick={() => setSelected(face)}
-                  aria-label={`Open preview for face ${face.id}`}
+                  onClick={() => setSelectedId(face.id)}
+                  aria-label={`Open preview for ${face.name ?? `face ${face.id}`}`}
                 >
                   <img
                     src={face.preview}
-                    alt={`Face ${face.id}`}
+                    alt={face.name ?? `Face ${face.id}`}
                     width={120}
                     height={120}
                     loading="lazy"
@@ -199,16 +337,23 @@ function WatchFaces() {
                   </span>
                 </button>
                 <div className="face-meta">
-                  <span className="face-id">#{face.id}</span>
-                  <a
-                    href={face.file}
-                    target="_blank"
-                    rel="noreferrer"
-                    aria-label={`Download .bin for face ${face.id}`}
-                  >
-                    <ExternalLink size={14} aria-hidden />
-                    .bin
-                  </a>
+                  <span className="face-id" title={`id ${face.id}`}>
+                    {face.name ?? `#${face.id}`}
+                  </span>
+                  <div className="face-meta-row">
+                    {face.uploader && (
+                      <span className="face-uploader" title={`Uploader: ${face.uploader}`}>
+                        <User size={12} aria-hidden />
+                        {face.uploader}
+                      </span>
+                    )}
+                    {face.download !== null && (
+                      <span className="face-downloads" title={`${face.download} downloads`}>
+                        <Download size={12} aria-hidden />
+                        {formatCount(face.download)}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </li>
             ))}
@@ -261,7 +406,13 @@ function WatchFaces() {
         </>
       )}
 
-      <FacePreviewModal face={selected} onClose={() => setSelected(null)} />
+      <FacePreviewModal
+        faceId={selectedId}
+        fv={applied.fv}
+        lang={applied.lang}
+        onClose={() => setSelectedId(null)}
+        onPickRelated={(id) => setSelectedId(id)}
+      />
     </section>
   )
 }

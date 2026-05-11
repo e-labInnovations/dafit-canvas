@@ -6,6 +6,13 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
+      // Order matters: longer prefix first so /api/moyoung-cdn doesn't get
+      // greedily matched by /api/moyoung.
+      '/api/moyoung-cdn': {
+        target: 'https://api-cdn.moyoung.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/moyoung-cdn/, ''),
+      },
       '/api/moyoung': {
         target: 'https://api.moyoung.com',
         changeOrigin: true,
