@@ -1,5 +1,7 @@
+import { useMemo } from 'react'
 import { useEditor } from '../../store/editorStore'
-import { SCREEN_H, SCREEN_W, type FaceElement } from '../../types/face'
+import { listLayers } from '../../lib/projectIO'
+import { SCREEN_H, SCREEN_W } from '../../types/face'
 
 const NumField = ({
   label,
@@ -7,20 +9,23 @@ const NumField = ({
   onChange,
   min,
   max,
+  disabled,
 }: {
   label: string
-  value: number
+  value: number | null
   onChange: (n: number) => void
   min?: number
   max?: number
+  disabled?: boolean
 }) => (
   <label className="prop-field">
     <span>{label}</span>
     <input
       type="number"
-      value={value}
+      value={value ?? ''}
       min={min}
       max={max}
+      disabled={disabled || value === null}
       onChange={(e) => {
         const n = parseInt(e.target.value, 10)
         if (Number.isFinite(n)) onChange(n)
@@ -29,167 +34,81 @@ const NumField = ({
   </label>
 )
 
-const ColorField = ({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: string
-  onChange: (s: string) => void
-}) => (
-  <label className="prop-field">
-    <span>{label}</span>
-    <span className="prop-color">
-      <input
-        type="color"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-    </span>
-  </label>
-)
-
-const TextField = ({
-  label,
-  value,
-  onChange,
-}: {
-  label: string
-  value: string
-  onChange: (s: string) => void
-}) => (
-  <label className="prop-field">
-    <span>{label}</span>
-    <input
-      type="text"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  </label>
-)
-
 function PropertyPanel() {
   const project = useEditor((s) => s.project)
-  const selectedId = useEditor((s) => s.selectedId)
-  const updateElement = useEditor((s) => s.updateElement)
+  const selectedIdx = useEditor((s) => s.selectedIdx)
+  const setLayerPosition = useEditor((s) => s.setLayerPosition)
   const setFaceNumber = useEditor((s) => s.setFaceNumber)
 
-  const selected: FaceElement | undefined = selectedId
-    ? project.elements.find((e) => e.id === selectedId)
-    : undefined
+  const layers = useMemo(() => (project ? listLayers(project) : []), [project])
+  const layer = selectedIdx !== null ? layers[selectedIdx] : undefined
 
   return (
     <aside className="editor-pane editor-props">
       <h3>Project</h3>
-      <NumField
-        label="faceNumber"
-        value={project.faceNumber}
-        onChange={(n) => setFaceNumber(n)}
-        min={1}
-      />
+      {project?.format === 'typeC' && (
+        <NumField
+          label="faceNumber"
+          value={project.header.faceNumber}
+          onChange={(n) => setFaceNumber(n)}
+          min={1}
+        />
+      )}
+      {project?.format === 'faceN' && (
+        <p className="hint">
+          FaceN binaries don't carry a faceNumber — the device slot is decided
+          at upload time.
+        </p>
+      )}
 
-      {!selected && (
+      {!layer && (
         <p className="hint">Select a layer to edit its properties.</p>
       )}
 
-      {selected && (
+      {layer && (
         <>
-          <h3>Element</h3>
-          <TextField
-            label="name"
-            value={selected.name}
-            onChange={(name) => updateElement(selected.id, { name })}
-          />
-
-          {selected.kind !== 'background' && (
-            <div className="prop-row">
-              <NumField
-                label="x"
-                value={selected.x}
-                onChange={(x) => updateElement(selected.id, { x })}
-                min={-SCREEN_W}
-                max={SCREEN_W}
-              />
-              <NumField
-                label="y"
-                value={selected.y}
-                onChange={(y) => updateElement(selected.id, { y })}
-                min={-SCREEN_H}
-                max={SCREEN_H}
-              />
-            </div>
-          )}
-
-          {selected.kind === 'background' && (
-            <ColorField
-              label="color"
-              value={selected.color}
-              onChange={(color) => updateElement(selected.id, { color })}
+          <h3>Layer</h3>
+          <p className="prop-meta" title={layer.name}>
+            {layer.name}
+          </p>
+          <div className="prop-row">
+            <NumField
+              label="x"
+              value={layer.x}
+              onChange={(x) =>
+                setLayerPosition(layer.index, x, layer.y ?? 0)
+              }
+              min={-SCREEN_W}
+              max={SCREEN_W * 2}
             />
-          )}
-
-          {selected.kind === 'time' && (
-            <>
-              <label className="prop-field">
-                <span>format</span>
-                <select
-                  value={selected.format}
-                  onChange={(e) =>
-                    updateElement(selected.id, {
-                      format: e.target.value as 'HH:mm' | 'HH:mm:ss',
-                    })
-                  }
-                >
-                  <option value="HH:mm">HH:mm</option>
-                  <option value="HH:mm:ss">HH:mm:ss</option>
-                </select>
-              </label>
-              <NumField
-                label="font size"
-                value={selected.fontSize}
-                onChange={(fontSize) =>
-                  updateElement(selected.id, { fontSize })
-                }
-                min={6}
-                max={120}
-              />
-              <ColorField
-                label="color"
-                value={selected.color}
-                onChange={(color) => updateElement(selected.id, { color })}
-              />
-            </>
-          )}
-
-          {selected.kind === 'text' && (
-            <>
-              <TextField
-                label="text"
-                value={selected.text}
-                onChange={(text) => updateElement(selected.id, { text })}
-              />
-              <NumField
-                label="font size"
-                value={selected.fontSize}
-                onChange={(fontSize) =>
-                  updateElement(selected.id, { fontSize })
-                }
-                min={6}
-                max={120}
-              />
-              <ColorField
-                label="color"
-                value={selected.color}
-                onChange={(color) => updateElement(selected.id, { color })}
-              />
-            </>
-          )}
+            <NumField
+              label="y"
+              value={layer.y}
+              onChange={(y) =>
+                setLayerPosition(layer.index, layer.x ?? 0, y)
+              }
+              min={-SCREEN_H}
+              max={SCREEN_H * 2}
+            />
+          </div>
+          <div className="prop-row">
+            <NumField
+              label="w"
+              value={layer.w}
+              onChange={() => {}}
+              disabled
+            />
+            <NumField
+              label="h"
+              value={layer.h}
+              onChange={() => {}}
+              disabled
+            />
+          </div>
+          <p className="hint">
+            Width/height are derived from the bound asset(s). Phase 2 will let
+            you swap assets to change them.
+          </p>
         </>
       )}
     </aside>

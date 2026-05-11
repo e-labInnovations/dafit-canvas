@@ -1,41 +1,35 @@
+import type { DecodedBlob, FaceHeader } from '../lib/dawft'
+import type { FaceN } from '../lib/faceN'
+
 export const SCREEN_W = 240
 export const SCREEN_H = 240
 
-export type ElementId = string
+export type WatchFormat = 'typeC' | 'faceN'
 
-type ElementBase = {
-  id: ElementId
-  name: string
-  visible: boolean
-  x: number
-  y: number
+/** Project state for a Type C face. We keep the rich parsed structure so the
+ *  editor can mutate fields in-place and the canvas can render directly via
+ *  the existing `renderFace` path. */
+export type TypeCProject = {
+  format: 'typeC'
+  fileName: string | null
+  header: FaceHeader
+  blobs: DecodedBlob[]
 }
 
-export type BackgroundElement = ElementBase & {
-  kind: 'background'
-  color: string
+/** Project state for a FaceN face. Same trick: store the binary-parsed shape
+ *  and let the renderer consume it directly; converters in projectIO.ts handle
+ *  bin/zip export. */
+export type FaceNProject = {
+  format: 'faceN'
+  fileName: string | null
+  face: FaceN
 }
 
-export type TimeElement = ElementBase & {
-  kind: 'time'
-  format: 'HH:mm' | 'HH:mm:ss'
-  fontSize: number
-  color: string
-}
+export type EditorProject = TypeCProject | FaceNProject
 
-export type TextElement = ElementBase & {
-  kind: 'text'
-  text: string
-  fontSize: number
-  color: string
-}
-
-export type FaceElement = BackgroundElement | TimeElement | TextElement
-
-export type FaceProject = {
-  version: 1
-  faceNumber: number
-  elements: FaceElement[]
-}
-
-export const PROJECT_VERSION = 1 as const
+/** Currently selected layer (index into the project's element array; meaning
+ *  depends on format). null = nothing selected. */
+export type Selection =
+  | { format: 'typeC'; faceDataIdx: number }
+  | { format: 'faceN'; elementIdx: number }
+  | null
