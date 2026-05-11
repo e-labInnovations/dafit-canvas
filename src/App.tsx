@@ -4,6 +4,7 @@ import WatchFaces from './pages/WatchFaces'
 import UploadWatchFace from './pages/UploadWatchFace'
 import Editor from './pages/Editor'
 import Dump from './pages/Dump'
+import Pack from './pages/Pack'
 import './App.css'
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
         <NavLink to="/watch-faces">Watch faces</NavLink>
         <NavLink to="/editor">Editor</NavLink>
         <NavLink to="/dump">Dump</NavLink>
+        <NavLink to="/pack">Pack</NavLink>
         <NavLink to="/upload">Upload</NavLink>
       </nav>
 
@@ -24,6 +26,7 @@ function App() {
         <Route path="/watch-faces" element={<WatchFaces />} />
         <Route path="/editor" element={<Editor />} />
         <Route path="/dump" element={<Dump />} />
+        <Route path="/pack" element={<Pack />} />
         <Route path="/upload" element={<UploadWatchFace />} />
       </Routes>
     </>

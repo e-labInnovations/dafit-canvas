@@ -975,3 +975,680 @@ export const collectBlobs = (
 
   return { files, names: { preview: previewName, digits: digitNames, elements: elementNames } }
 }
+
+// ---------- watchface.json parser (pack input) ----------
+
+const alignFromNumber = (n: unknown): Align => (n === 1 ? 'R' : n === 2 ? 'C' : 'L')
+
+/** A parsed `watchface.json` describes layout + per-image filename references.
+ *  Pixel data is loaded separately from the matching BMP files. */
+export type ParsedWatchfaceJson = {
+  apiVer: number
+  unknown: number
+  previewName: string | null
+  previewW: number
+  previewH: number
+  digitSets: { unknown: number; digits: { w: number; h: number; fileName: string | null }[] }[]
+  elements: ParsedElement[]
+}
+
+type WH = { w: number; h: number; fileName: string | null }
+
+export type ParsedElement =
+  | { kind: 'Image'; x: number; y: number; img: WH }
+  | { kind: 'TimeNum'; digitSets: [number, number, number, number]; xys: XY[]; unknown: Uint8Array }
+  | { kind: 'DayName'; nType: number; x: number; y: number; imgs: WH[] }
+  | {
+      kind: 'BatteryFill'
+      x: number
+      y: number
+      bgImg: WH
+      x1: number
+      y1: number
+      x2: number
+      y2: number
+      unknown0: number
+      unknown1: number
+      img1: WH
+      img2: WH
+    }
+  | { kind: 'HeartRateNum'; digitSet: number; align: Align; x: number; y: number }
+  | { kind: 'StepsNum'; digitSet: number; align: Align; x: number; y: number }
+  | { kind: 'KCalNum'; digitSet: number; align: Align; x: number; y: number }
+  | { kind: 'TimeHand'; hType: number; pivotX: number; pivotY: number; img: WH; x: number; y: number }
+  | { kind: 'DayNum'; digitSet: number; align: Align; xys: [XY, XY] }
+  | { kind: 'MonthNum'; digitSet: number; align: Align; xys: [XY, XY] }
+  | { kind: 'BarDisplay'; bType: number; count: number; x: number; y: number; imgs: WH[] }
+  | { kind: 'Weather'; count: number; x: number; y: number; imgs: WH[] }
+  | { kind: 'Unknown29'; unknown: number }
+  | { kind: 'Dash'; img: WH }
+
+// Convert an arbitrary JSON img_data shape to our local WH.
+const toWH = (v: unknown): WH => {
+  if (!v || typeof v !== 'object') return { w: 0, h: 0, fileName: null }
+  const o = v as Record<string, unknown>
+  return {
+    w: typeof o.w === 'number' ? o.w : 0,
+    h: typeof o.h === 'number' ? o.h : 0,
+    fileName: typeof o.file_name === 'string' ? o.file_name : null,
+  }
+}
+
+const toXY = (v: unknown): XY => {
+  if (!v || typeof v !== 'object') return { x: 0, y: 0 }
+  const o = v as Record<string, unknown>
+  return {
+    x: typeof o.x === 'number' ? o.x : 0,
+    y: typeof o.y === 'number' ? o.y : 0,
+  }
+}
+
+const num = (v: unknown, fallback = 0): number =>
+  typeof v === 'number' && Number.isFinite(v) ? v : fallback
+
+export const parseWatchfaceJson = (text: string): ParsedWatchfaceJson => {
+  const data = JSON.parse(text) as Record<string, unknown>
+
+  const preview = (data.preview_img_data ?? {}) as Record<string, unknown>
+  const digitsRaw = Array.isArray(data.digits) ? data.digits : []
+  const elementsRaw = Array.isArray(data.elements) ? data.elements : []
+
+  const digitSets = digitsRaw.map((set) => {
+    const s = set as Record<string, unknown>
+    const list = Array.isArray(s.img_data) ? s.img_data : []
+    return {
+      unknown: num(s.unknown),
+      digits: list.slice(0, 10).map(toWH),
+    }
+  })
+
+  const elements: ParsedElement[] = elementsRaw.map((el) => {
+    const e = el as Record<string, unknown>
+    const eType = e.e_type
+    switch (eType) {
+      case 'image':
+        return { kind: 'Image', x: num(e.x), y: num(e.y), img: toWH(e.img_data) }
+      case 'time_num': {
+        const sets = Array.isArray(e.digit_sets) ? e.digit_sets : [0, 0, 0, 0]
+        const xys = Array.isArray(e.xys) ? e.xys.map(toXY) : []
+        const unkArr = Array.isArray(e.unknown) ? e.unknown : []
+        return {
+          kind: 'TimeNum',
+          digitSets: [num(sets[0]), num(sets[1]), num(sets[2]), num(sets[3])],
+          xys: [xys[0] ?? { x: 0, y: 0 }, xys[1] ?? { x: 0, y: 0 }, xys[2] ?? { x: 0, y: 0 }, xys[3] ?? { x: 0, y: 0 }],
+          unknown: new Uint8Array(unkArr.slice(0, 12).map((v) => num(v))),
+        }
+      }
+      case 'day_name': {
+        const list = Array.isArray(e.img_data) ? e.img_data : []
+        return {
+          kind: 'DayName',
+          nType: num(e.n_type),
+          x: num(e.x),
+          y: num(e.y),
+          imgs: list.slice(0, 7).map(toWH),
+        }
+      }
+      case 'battery_fill':
+        return {
+          kind: 'BatteryFill',
+          x: num(e.x),
+          y: num(e.y),
+          bgImg: toWH(e.img_data),
+          x1: num(e.x1),
+          y1: num(e.y1),
+          x2: num(e.x2),
+          y2: num(e.y2),
+          unknown0: num(e.unknown0),
+          unknown1: num(e.unknown1),
+          img1: toWH(e.image_data1),
+          img2: toWH(e.image_data2),
+        }
+      case 'heart_rate_num':
+        return { kind: 'HeartRateNum', digitSet: num(e.digit_set), align: alignFromNumber(e.align), x: num(e.x), y: num(e.y) }
+      case 'steps_num':
+        return { kind: 'StepsNum', digitSet: num(e.digit_set), align: alignFromNumber(e.align), x: num(e.x), y: num(e.y) }
+      case 'k_cal_num':
+        return { kind: 'KCalNum', digitSet: num(e.digit_set), align: alignFromNumber(e.align), x: num(e.x), y: num(e.y) }
+      case 'time_hand':
+        return {
+          kind: 'TimeHand',
+          hType: num(e.h_type),
+          pivotX: num(e.unknown_x),
+          pivotY: num(e.unknown_y),
+          img: toWH(e.img_data),
+          x: num(e.x),
+          y: num(e.y),
+        }
+      case 'day_num':
+      case 'month_num': {
+        const xys = Array.isArray(e.xys) ? e.xys.map(toXY) : []
+        return {
+          kind: eType === 'day_num' ? 'DayNum' : 'MonthNum',
+          digitSet: num(e.digit_set),
+          align: alignFromNumber(e.align),
+          xys: [xys[0] ?? { x: 0, y: 0 }, xys[1] ?? { x: 0, y: 0 }],
+        }
+      }
+      case 'bar_display': {
+        const list = Array.isArray(e.img_data) ? e.img_data : []
+        return {
+          kind: 'BarDisplay',
+          bType: num(e.b_type),
+          count: num(e.count, list.length),
+          x: num(e.x),
+          y: num(e.y),
+          imgs: list.map(toWH),
+        }
+      }
+      case 'weather': {
+        const list = Array.isArray(e.img_data) ? e.img_data : []
+        return {
+          kind: 'Weather',
+          count: num(e.count, list.length),
+          x: num(e.x),
+          y: num(e.y),
+          imgs: list.map(toWH),
+        }
+      }
+      case 'unknown29':
+        return { kind: 'Unknown29', unknown: num(e.unknown) }
+      case 'dash':
+        return { kind: 'Dash', img: toWH(e.img_data) }
+      default:
+        // Skip unknown e_type — caller will see fewer elements but pack continues.
+        return { kind: 'Unknown29', unknown: 0 }
+    }
+  })
+
+  return {
+    apiVer: num(data.api_ver, 1),
+    unknown: num(data.unknown, 0),
+    previewName: typeof preview.file_name === 'string' ? preview.file_name : null,
+    previewW: num(preview.w),
+    previewH: num(preview.h),
+    digitSets,
+    elements,
+  }
+}
+
+// ---------- RleNew encoder (pack) ----------
+
+/** Convert an RGBA8888 buffer to a contiguous ARGB8565 byte stream
+ *  (3 bytes per pixel, top-down). Alpha first, then RGB565 high, then low. */
+const rgbaToArgb8565 = (
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+): Uint8Array => {
+  const out = new Uint8Array(width * height * 3)
+  for (let i = 0; i < width * height; i++) {
+    const r = rgba[i * 4]
+    const g = rgba[i * 4 + 1]
+    const b = rgba[i * 4 + 2]
+    const a = rgba[i * 4 + 3]
+    const r5 = (r >> 3) & 0x1f
+    const g6 = (g >> 2) & 0x3f
+    const b5 = (b >> 3) & 0x1f
+    const rgb565 = (r5 << 11) | (g6 << 5) | b5
+    out[i * 3] = a
+    out[i * 3 + 1] = (rgb565 >> 8) & 0xff
+    out[i * 3 + 2] = rgb565 & 0xff
+  }
+  return out
+}
+
+const pixelsEqual = (buf: Uint8Array, a: number, b: number): boolean =>
+  buf[a] === buf[b] && buf[a + 1] === buf[b + 1] && buf[a + 2] === buf[b + 2]
+
+/**
+ * Port of extrathundertool's `argb8565_to_rle_new`. Per row, emits cmd bytes
+ * where `cmd & 0x80` means run-length-(cmd&0x7F) of the following pixel and
+ * otherwise means a literal-N stretch. Returns `{ header, data }` where the
+ * 4-byte-per-row header packs `(offset << 0, size << 5)` into a u32.
+ */
+export const encodeRleNew = (
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+): { header: Uint8Array; data: Uint8Array } => {
+  if (width === 0 || height === 0) {
+    return { header: new Uint8Array(0), data: new Uint8Array(0) }
+  }
+  const argb = rgbaToArgb8565(rgba, width, height)
+  const rowWidth = width * 3
+  const dataParts: number[] = []
+  const header = new Uint8Array(height * 4)
+  let destOffset = height * 4
+
+  for (let y = 0; y < height; y++) {
+    const rowStart = y * rowWidth
+    const rowBefore = dataParts.length
+    let offset = 0
+
+    while (offset <= rowWidth - 9) {
+      const pA = rowStart + offset
+      const pB = pA + 3
+      const pC = pB + 3
+      if (pixelsEqual(argb, pA, pB) && pixelsEqual(argb, pB, pC)) {
+        // Repeating block
+        let count = 2
+        offset += 6
+        while (count < 127 && offset <= rowWidth - 3) {
+          if (!pixelsEqual(argb, rowStart + offset, pA)) break
+          count++
+          offset += 3
+        }
+        dataParts.push(0x80 | count, argb[pA], argb[pA + 1], argb[pA + 2])
+      } else {
+        // Non-repeating block
+        let nrStart = offset
+        let nrCount = 0
+        while (nrCount < 127) {
+          const a = rowStart + offset
+          const b = a + 3
+          const c = b + 3
+          if (offset <= rowWidth - 9 && pixelsEqual(argb, a, b) && pixelsEqual(argb, b, c)) {
+            break
+          }
+          nrCount++
+          offset += 3
+          if (offset > rowWidth - 9) {
+            while (offset < rowWidth) {
+              if (nrCount === 127) {
+                dataParts.push(nrCount)
+                for (let k = rowStart + nrStart; k < rowStart + offset; k++) dataParts.push(argb[k])
+                nrCount = 0
+                nrStart = offset
+              }
+              nrCount++
+              offset += 3
+            }
+            break
+          }
+        }
+        dataParts.push(nrCount)
+        for (let k = rowStart + nrStart; k < rowStart + offset; k++) dataParts.push(argb[k])
+      }
+    }
+
+    // Tail: whatever's left as a literal stretch.
+    const remaining = (rowWidth - offset) / 3
+    if (remaining > 0) {
+      dataParts.push(remaining)
+      for (let k = rowStart + offset; k < rowStart + rowWidth; k++) dataParts.push(argb[k])
+    }
+
+    const rowSize = dataParts.length - rowBefore
+    if (rowSize > 0x7ff) {
+      throw new Error(
+        `Row ${y} compressed to ${rowSize} bytes which exceeds the 11-bit size field`,
+      )
+    }
+    if (destOffset > 0x1fffff) {
+      throw new Error(
+        `Compressed image too large (${destOffset} bytes) for 21-bit row offset`,
+      )
+    }
+    const rowSizeShifted = rowSize * 32
+    header[y * 4] = destOffset & 0xff
+    header[y * 4 + 1] = (destOffset >> 8) & 0xff
+    header[y * 4 + 2] = ((destOffset >> 16) & 0x1f) | (rowSizeShifted & 0xff)
+    header[y * 4 + 3] = (rowSizeShifted >> 8) & 0xff
+
+    destOffset += rowSize
+  }
+
+  return { header, data: new Uint8Array(dataParts) }
+}
+
+// ---------- FaceN .bin writer ----------
+
+const padToAlign4 = (n: number): number => (n % 4 === 0 ? 0 : 4 - (n % 4))
+
+type EncodedBlob = { header: Uint8Array; data: Uint8Array; w: number; h: number }
+
+const encodeOrEmpty = (
+  bitmaps: Map<string, { width: number; height: number; rgba: Uint8ClampedArray }>,
+  ref: WH,
+): EncodedBlob => {
+  if (!ref.fileName) {
+    return { header: new Uint8Array(0), data: new Uint8Array(0), w: ref.w, h: ref.h }
+  }
+  const bmp = bitmaps.get(ref.fileName)
+  if (!bmp) {
+    throw new Error(`Missing bitmap '${ref.fileName}'`)
+  }
+  const { header, data } = encodeRleNew(bmp.rgba, bmp.width, bmp.height)
+  return { header, data, w: bmp.width, h: bmp.height }
+}
+
+const blobBytes = (b: EncodedBlob): number => {
+  const total = b.header.byteLength + b.data.byteLength
+  return total + padToAlign4(total)
+}
+
+/** A WH plus the encoded data that will live in the blob payload. */
+type LinkedBlob = WH & { encoded: EncodedBlob; placedOffset: number }
+
+const link = (
+  bitmaps: Map<string, { width: number; height: number; rgba: Uint8ClampedArray }>,
+  ref: WH,
+): LinkedBlob => ({
+  ...ref,
+  encoded: encodeOrEmpty(bitmaps, ref),
+  placedOffset: 0,
+})
+
+export type PackFaceNInput = {
+  config: ParsedWatchfaceJson
+  /** filename → decoded BMP. */
+  bitmaps: Map<string, { width: number; height: number; rgba: Uint8ClampedArray }>
+}
+
+/** Total binary size per element kind (INCLUDING the leading `{1, e_type}`
+ *  prefix). Mirrors STATIC_ELEMENT_SIZE in the parser. */
+const ELEMENT_TOTAL_SIZE: Record<string, number> = {
+  Image: 14,
+  TimeNum: 34,
+  DayName: 63,
+  BatteryFill: 42,
+  HeartRateNum: 26,
+  StepsNum: 26,
+  KCalNum: 19,
+  TimeHand: 19,
+  DayNum: 12,
+  MonthNum: 12,
+  Unknown29: 3,
+  Dash: 10,
+}
+
+const computeElementSize = (el: ParsedElement): number => {
+  if (el.kind === 'BarDisplay') return 8 + el.count * 8
+  if (el.kind === 'Weather') return 7 + el.count * 8
+  return ELEMENT_TOTAL_SIZE[el.kind] ?? 0
+}
+
+const ELEMENT_E_TYPE: Record<string, number> = {
+  Image: 0,
+  TimeNum: 2,
+  DayName: 4,
+  BatteryFill: 5,
+  HeartRateNum: 6,
+  StepsNum: 7,
+  KCalNum: 9,
+  TimeHand: 10,
+  DayNum: 13,
+  MonthNum: 15,
+  BarDisplay: 18,
+  Weather: 27,
+  Unknown29: 29,
+  Dash: 35,
+}
+
+/** Assemble a FaceN .bin file from a parsed watchface.json and decoded BMPs. */
+export const packFaceN = ({ config, bitmaps }: PackFaceNInput): Uint8Array => {
+  // ---------- step 1: link every img_data to its encoded blob ----------
+  const previewBlob: EncodedBlob = config.previewName
+    ? (() => {
+        const bmp = bitmaps.get(config.previewName!)
+        if (!bmp) throw new Error(`Missing preview bitmap '${config.previewName}'`)
+        const { header, data } = encodeRleNew(bmp.rgba, bmp.width, bmp.height)
+        return { header, data, w: bmp.width, h: bmp.height }
+      })()
+    : { header: new Uint8Array(0), data: new Uint8Array(0), w: config.previewW, h: config.previewH }
+
+  const linkedDigits = config.digitSets.map((set) =>
+    set.digits.map((d) => link(bitmaps, d)),
+  )
+
+  type LinkedElement = { el: ParsedElement; refs: LinkedBlob[] }
+  const linkedElements: LinkedElement[] = config.elements.map((el): LinkedElement => {
+    switch (el.kind) {
+      case 'Image':
+        return { el, refs: [link(bitmaps, el.img)] }
+      case 'TimeNum':
+      case 'HeartRateNum':
+      case 'StepsNum':
+      case 'KCalNum':
+      case 'DayNum':
+      case 'MonthNum':
+      case 'Unknown29':
+        return { el, refs: [] }
+      case 'DayName':
+        return { el, refs: el.imgs.map((i) => link(bitmaps, i)) }
+      case 'BatteryFill':
+        return {
+          el,
+          refs: [link(bitmaps, el.bgImg), link(bitmaps, el.img1), link(bitmaps, el.img2)],
+        }
+      case 'TimeHand':
+        return { el, refs: [link(bitmaps, el.img)] }
+      case 'BarDisplay':
+      case 'Weather':
+        return { el, refs: el.imgs.map((i) => link(bitmaps, i)) }
+      case 'Dash':
+        return { el, refs: [link(bitmaps, el.img)] }
+    }
+  })
+
+  // ---------- step 2: compute header layout ----------
+  const fileHeaderSize = 16
+  const digitsSectionSize =
+    linkedDigits.length > 0 ? 2 + linkedDigits.length * DIGIT_SET_RECORD_SIZE : 0
+  const dhOffset = linkedDigits.length > 0 ? 16 : 0
+  const bhOffset = 16 + digitsSectionSize
+
+  // computeElementSize already includes the leading `{1, e_type}` 2 bytes.
+  const elementsHeaderSize = linkedElements.reduce(
+    (sum, le) => sum + computeElementSize(le.el),
+    0,
+  )
+  const totalHeaderSize = fileHeaderSize + digitsSectionSize + elementsHeaderSize + 2 // +2 terminator
+  const headerAlign = padToAlign4(totalHeaderSize)
+  let blobOffset = totalHeaderSize + headerAlign
+
+  // ---------- step 3: assign blob offsets to each LinkedBlob ----------
+  const assignBlob = (lb: LinkedBlob) => {
+    if (lb.encoded.header.byteLength === 0 && lb.encoded.data.byteLength === 0) {
+      lb.placedOffset = 0
+      return
+    }
+    lb.placedOffset = blobOffset
+    blobOffset += blobBytes(lb.encoded)
+  }
+
+  for (const set of linkedDigits) for (const d of set) assignBlob(d)
+  for (const le of linkedElements) for (const r of le.refs) assignBlob(r)
+  // preview goes last (matches extrathundertool's order)
+  let previewOffset = 0
+  if (previewBlob.header.byteLength > 0 || previewBlob.data.byteLength > 0) {
+    previewOffset = blobOffset
+    blobOffset += blobBytes(previewBlob)
+  }
+
+  // ---------- step 4: serialize header + sections ----------
+  const fileSize = blobOffset
+  const out = new Uint8Array(fileSize)
+  const view = new DataView(out.buffer)
+  let p = 0
+
+  // FaceNHeader
+  view.setUint16(0, config.apiVer, true)
+  view.setUint16(2, config.unknown, true)
+  view.setUint32(4, previewOffset, true)
+  view.setUint16(8, previewBlob.w, true)
+  view.setUint16(10, previewBlob.h, true)
+  view.setUint16(12, dhOffset, true)
+  view.setUint16(14, bhOffset, true)
+  p = 16
+
+  // Digits section: 2-byte intro then each 83-byte digit set record.
+  if (linkedDigits.length > 0) {
+    view.setUint16(p, 0x0101, true)
+    p += 2
+    for (let sIdx = 0; sIdx < linkedDigits.length; sIdx++) {
+      const set = linkedDigits[sIdx]
+      const setRec = config.digitSets[sIdx]
+      out[p] = sIdx
+      let off = p + 1
+      for (let dIdx = 0; dIdx < 10; dIdx++) {
+        const d = set[dIdx] ?? { placedOffset: 0, w: 0, h: 0 } as LinkedBlob
+        view.setUint32(off, d.placedOffset, true)
+        view.setUint16(off + 4, d.w, true)
+        view.setUint16(off + 6, d.h, true)
+        off += 8
+      }
+      view.setUint16(off, setRec?.unknown ?? 0, true)
+      p += DIGIT_SET_RECORD_SIZE
+    }
+  }
+
+  // Elements
+  const writeOWH = (offsetByte: number, lb: LinkedBlob) => {
+    view.setUint32(offsetByte, lb.placedOffset, true)
+    view.setUint16(offsetByte + 4, lb.w, true)
+    view.setUint16(offsetByte + 6, lb.h, true)
+  }
+
+  for (const { el, refs } of linkedElements) {
+    const elStart = p
+    out[p] = 1
+    out[p + 1] = ELEMENT_E_TYPE[el.kind] ?? 0
+    p += 2
+
+    switch (el.kind) {
+      case 'Image':
+        view.setUint16(p, el.x, true)
+        view.setUint16(p + 2, el.y, true)
+        writeOWH(p + 4, refs[0])
+        p += 12
+        break
+      case 'TimeNum':
+        out[p] = el.digitSets[0]
+        out[p + 1] = el.digitSets[1]
+        out[p + 2] = el.digitSets[2]
+        out[p + 3] = el.digitSets[3]
+        for (let i = 0; i < 4; i++) {
+          view.setUint16(p + 4 + i * 4, el.xys[i].x, true)
+          view.setUint16(p + 4 + i * 4 + 2, el.xys[i].y, true)
+        }
+        for (let i = 0; i < 12; i++) out[p + 20 + i] = el.unknown[i] ?? 0
+        p += 32
+        break
+      case 'DayName':
+        out[p] = el.nType
+        view.setUint16(p + 1, el.x, true)
+        view.setUint16(p + 3, el.y, true)
+        for (let i = 0; i < 7; i++) writeOWH(p + 5 + i * 8, refs[i])
+        p += 61
+        break
+      case 'BatteryFill':
+        view.setUint16(p, el.x, true)
+        view.setUint16(p + 2, el.y, true)
+        writeOWH(p + 4, refs[0])
+        out[p + 12] = el.x1
+        out[p + 13] = el.y1
+        out[p + 14] = el.x2
+        out[p + 15] = el.y2
+        view.setUint32(p + 16, el.unknown0, true)
+        view.setUint32(p + 20, el.unknown1, true)
+        writeOWH(p + 24, refs[1])
+        writeOWH(p + 32, refs[2])
+        p += 40
+        break
+      case 'HeartRateNum':
+      case 'StepsNum': {
+        out[p] = el.digitSet
+        out[p + 1] = el.align === 'R' ? 1 : el.align === 'C' ? 2 : 0
+        view.setUint16(p + 2, el.x, true)
+        view.setUint16(p + 4, el.y, true)
+        // padding[18] left zero
+        p += 24
+        break
+      }
+      case 'KCalNum':
+        out[p] = el.digitSet
+        out[p + 1] = el.align === 'R' ? 1 : el.align === 'C' ? 2 : 0
+        view.setUint16(p + 2, el.x, true)
+        view.setUint16(p + 4, el.y, true)
+        p += 17
+        break
+      case 'TimeHand':
+        out[p] = el.hType
+        view.setUint16(p + 1, el.pivotX, true)
+        view.setUint16(p + 3, el.pivotY, true)
+        writeOWH(p + 5, refs[0])
+        view.setUint16(p + 13, el.x, true)
+        view.setUint16(p + 15, el.y, true)
+        p += 17
+        break
+      case 'DayNum':
+      case 'MonthNum':
+        out[p] = el.digitSet
+        out[p + 1] = el.align === 'R' ? 1 : el.align === 'C' ? 2 : 0
+        view.setUint16(p + 2, el.xys[0].x, true)
+        view.setUint16(p + 4, el.xys[0].y, true)
+        view.setUint16(p + 6, el.xys[1].x, true)
+        view.setUint16(p + 8, el.xys[1].y, true)
+        p += 10
+        break
+      case 'BarDisplay':
+        out[p] = el.bType
+        out[p + 1] = el.count
+        view.setUint16(p + 2, el.x, true)
+        view.setUint16(p + 4, el.y, true)
+        for (let i = 0; i < el.count; i++) writeOWH(p + 6 + i * 8, refs[i])
+        p += 6 + el.count * 8
+        break
+      case 'Weather':
+        out[p] = el.count
+        view.setUint16(p + 1, el.x, true)
+        view.setUint16(p + 3, el.y, true)
+        for (let i = 0; i < el.count; i++) writeOWH(p + 5 + i * 8, refs[i])
+        p += 5 + el.count * 8
+        break
+      case 'Unknown29':
+        out[p] = el.unknown
+        p += 1
+        break
+      case 'Dash':
+        writeOWH(p, refs[0])
+        p += 8
+        break
+    }
+
+    const expected = computeElementSize(el)
+    if (p - elStart !== expected) {
+      throw new Error(
+        `Element ${el.kind} wrote ${p - elStart} bytes, expected ${expected}`,
+      )
+    }
+  }
+
+  // Terminator
+  out[p++] = 0
+  out[p++] = 0
+
+  // Align before blob payload (fill with 0xFF per extrathundertool's pad_it)
+  for (let i = 0; i < headerAlign; i++) out[p + i] = 0xff
+  p += headerAlign
+
+  // ---------- step 5: write blob payloads ----------
+  const writeBlob = (lb: EncodedBlob) => {
+    if (lb.header.byteLength === 0 && lb.data.byteLength === 0) return
+    out.set(lb.header, p)
+    p += lb.header.byteLength
+    out.set(lb.data, p)
+    p += lb.data.byteLength
+    const pad = padToAlign4(lb.header.byteLength + lb.data.byteLength)
+    for (let i = 0; i < pad; i++) out[p + i] = 0xff
+    p += pad
+  }
+
+  for (const set of linkedDigits) for (const d of set) writeBlob(d.encoded)
+  for (const le of linkedElements) for (const r of le.refs) writeBlob(r.encoded)
+  writeBlob(previewBlob)
+
+  return out
+}

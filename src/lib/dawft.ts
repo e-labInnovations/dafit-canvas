@@ -455,3 +455,308 @@ export const buildWatchfaceTxt = (
   lines.push('')
   return lines.join('\n')
 }
+
+// ---------- watchface.txt parser (pack input) ----------
+
+const parseNumericToken = (s: string): number => {
+  if (s.startsWith('0x') || s.startsWith('0X')) return parseInt(s.substring(2), 16)
+  return parseInt(s, 10)
+}
+
+const typeCodeByName: Record<string, number> = (() => {
+  const m: Record<string, number> = {}
+  for (const [code, info] of Object.entries(TYPE_TABLE)) {
+    m[info.name] = parseInt(code, 10)
+  }
+  return m
+})()
+
+const parseFaceDataTypeToken = (s: string): number => {
+  if (/^0x/i.test(s)) return parseInt(s.substring(2), 16)
+  if (s in typeCodeByName) return typeCodeByName[s]
+  return parseInt(s, 10)
+}
+
+export type ParsedWatchfaceTxt = {
+  fileType: string
+  fileID: number
+  faceNumber: number
+  blobCount: number
+  animationFrames: number
+  faceData: (FaceDataEntry & { blobFileName?: string })[]
+  compressions: Map<number, Compression>
+}
+
+/** Parse a dawft-style `watchface.txt` back into a structured config. */
+export const parseWatchfaceTxt = (text: string): ParsedWatchfaceTxt => {
+  const result: ParsedWatchfaceTxt = {
+    fileType: 'C',
+    fileID: 0x81,
+    faceNumber: 0,
+    blobCount: 0,
+    animationFrames: 0,
+    faceData: [],
+    compressions: new Map(),
+  }
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const tokens = line.split(/\s+/)
+    const key = tokens[0]
+
+    switch (key) {
+      case 'fileType':
+        result.fileType = tokens[1] ?? 'C'
+        break
+      case 'fileID':
+        result.fileID = parseNumericToken(tokens[1])
+        break
+      case 'faceNumber':
+        result.faceNumber = parseNumericToken(tokens[1])
+        break
+      case 'blobCount':
+        result.blobCount = parseNumericToken(tokens[1])
+        break
+      case 'dataCount':
+        // recomputed from faceData.length, ignore the file's number
+        break
+      case 'animationFrames':
+        result.animationFrames = parseNumericToken(tokens[1])
+        break
+      case 'faceData': {
+        if (tokens.length < 7) continue
+        const entry: FaceDataEntry & { blobFileName?: string } = {
+          type: parseFaceDataTypeToken(tokens[1]),
+          idx: parseNumericToken(tokens[2]),
+          x: parseNumericToken(tokens[3]),
+          y: parseNumericToken(tokens[4]),
+          w: parseNumericToken(tokens[5]),
+          h: parseNumericToken(tokens[6]),
+        }
+        // Optional 8th token is a filename (not a comment).
+        if (tokens.length >= 8 && !tokens[7].startsWith('#')) {
+          entry.blobFileName = tokens[7]
+        }
+        result.faceData.push(entry)
+        break
+      }
+      case 'blobCompression': {
+        if (tokens.length < 3) continue
+        const idx = parseNumericToken(tokens[1])
+        const mode = tokens[2]
+        if (mode === 'RLE_LINE' || mode === 'TRY_RLE' || mode === 'RLE_BASIC') {
+          result.compressions.set(idx, 'RLE_LINE')
+        } else {
+          result.compressions.set(idx, 'NONE')
+        }
+        break
+      }
+    }
+  }
+
+  return result
+}
+
+// ---------- RLE_LINE encoder (pack) ----------
+
+/**
+ * Port of dawft's `compressImg` (RLE_LINE). Returns null if the image is too
+ * large for 16-bit row-end offsets — caller should fall back to uncompressed.
+ */
+export const encodeRleLine = (
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+): Uint8Array | null => {
+  const minSize = 2 + height * 2 + Math.ceil(width / 255) * 3 * height
+  if (minSize > 65535) return null
+
+  const maxSize = 2 + height * 2 + width * height * 3
+  const buf = new Uint8Array(maxSize)
+
+  buf[0] = 0x08
+  buf[1] = 0x21
+
+  let offset = 2 + 2 * height
+
+  for (let y = 0; y < height; y++) {
+    let prevHi = 0
+    let prevLo = 0
+    let runLength = 0
+
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4
+      const r5 = (rgba[i] >> 3) & 0x1f
+      const g6 = (rgba[i + 1] >> 2) & 0x3f
+      const b5 = (rgba[i + 2] >> 3) & 0x1f
+      const pixel = (r5 << 11) | (g6 << 5) | b5
+      const hi = (pixel >> 8) & 0xff
+      const lo = pixel & 0xff
+
+      if (x === 0) {
+        prevHi = hi
+        prevLo = lo
+        runLength = 1
+        continue
+      }
+      if (hi !== prevHi || lo !== prevLo) {
+        buf[offset] = prevHi
+        buf[offset + 1] = prevLo
+        buf[offset + 2] = runLength
+        offset += 3
+        prevHi = hi
+        prevLo = lo
+        runLength = 1
+      } else {
+        runLength++
+        if (runLength === 255) {
+          buf[offset] = prevHi
+          buf[offset + 1] = prevLo
+          buf[offset + 2] = runLength
+          offset += 3
+          runLength = 0
+        }
+      }
+    }
+
+    if (runLength > 0) {
+      buf[offset] = prevHi
+      buf[offset + 1] = prevLo
+      buf[offset + 2] = runLength
+      offset += 3
+    }
+
+    if (offset > 65535) return null
+    // line-end offset (exclusive byte index past this row's last triplet)
+    buf[2 + y * 2] = offset & 0xff
+    buf[2 + y * 2 + 1] = (offset >> 8) & 0xff
+  }
+
+  return buf.subarray(0, offset)
+}
+
+/** Uncompressed RGB565 BE pixel stream (no header), row by row. */
+export const encodeRgb565Raw = (
+  rgba: Uint8ClampedArray,
+  width: number,
+  height: number,
+): Uint8Array => {
+  const out = new Uint8Array(width * height * 2)
+  let p = 0
+  for (let i = 0; i < width * height; i++) {
+    const r5 = (rgba[i * 4] >> 3) & 0x1f
+    const g6 = (rgba[i * 4 + 1] >> 2) & 0x3f
+    const b5 = (rgba[i * 4 + 2] >> 3) & 0x1f
+    const pixel = (r5 << 11) | (g6 << 5) | b5
+    out[p++] = (pixel >> 8) & 0xff
+    out[p++] = pixel & 0xff
+  }
+  return out
+}
+
+// ---------- Type C .bin writer ----------
+
+export type PackTypeCBlob =
+  | { kind: 'bitmap'; width: number; height: number; rgba: Uint8ClampedArray }
+  /** Pre-formed blob bytes — written into the output unchanged. Used when the
+   *  dump produced a `.raw` for an undecodable blob (e.g. trailing previews). */
+  | { kind: 'raw'; data: Uint8Array }
+
+export type PackTypeCInput = {
+  config: ParsedWatchfaceTxt
+  /** One entry per blob index (0..blobCount-1). */
+  blobs: PackTypeCBlob[]
+}
+
+/** Assemble a Type C .bin file from a parsed watchface.txt and decoded BMPs. */
+export const packTypeC = ({ config, blobs }: PackTypeCInput): Uint8Array => {
+  const blobCount = config.blobCount || blobs.length
+  if (blobs.length < blobCount) {
+    throw new Error(
+      `Need ${blobCount} blobs but only ${blobs.length} were supplied.`,
+    )
+  }
+
+  // Encode every blob, choosing RLE if it shrinks the data (dawft's behaviour).
+  const compressedBlobs: Uint8Array[] = []
+  for (let i = 0; i < blobCount; i++) {
+    const input = blobs[i]
+    if (input.kind === 'raw') {
+      compressedBlobs.push(input.data)
+      continue
+    }
+    const { width, height, rgba } = input
+    const requested = config.compressions.get(i) ?? 'RLE_LINE'
+    if (requested === 'NONE') {
+      compressedBlobs.push(encodeRgb565Raw(rgba, width, height))
+      continue
+    }
+    const rle = encodeRleLine(rgba, width, height)
+    const raw = encodeRgb565Raw(rgba, width, height)
+    // dawft falls back to raw if RLE didn't actually save space.
+    if (!rle || rle.byteLength >= raw.byteLength) {
+      compressedBlobs.push(raw)
+    } else {
+      compressedBlobs.push(rle)
+    }
+  }
+
+  // Compute offsets table (relative to end of 1900-byte header).
+  const offsets: number[] = []
+  const sizes: number[] = []
+  let running = 0
+  for (let i = 0; i < blobCount; i++) {
+    offsets.push(running)
+    sizes.push(compressedBlobs[i].byteLength)
+    running += compressedBlobs[i].byteLength
+  }
+
+  const totalSize = TYPE_C_HEADER_SIZE + running
+  const out = new Uint8Array(totalSize)
+  const view = new DataView(out.buffer)
+
+  // ----- header -----
+  out[0] = config.fileID
+  out[1] = config.faceData.length
+  out[2] = blobCount
+  view.setUint16(3, config.faceNumber, true)
+
+  // FaceData[39] — 10 bytes each, starting at offset 5
+  for (let i = 0; i < 39; i++) {
+    const base = 5 + i * 10
+    if (i < config.faceData.length) {
+      const fd = config.faceData[i]
+      out[base] = fd.type
+      out[base + 1] = fd.idx
+      view.setUint16(base + 2, fd.x, true)
+      view.setUint16(base + 4, fd.y, true)
+      view.setUint16(base + 6, fd.w, true)
+      view.setUint16(base + 8, fd.h, true)
+    }
+    // remaining entries left as zero
+  }
+  // padding[5] at offset 395 stays zero
+
+  // offsets[250] at offset 400, u32 each
+  for (let i = 0; i < 250; i++) {
+    if (i < offsets.length) view.setUint32(400 + i * 4, offsets[i], true)
+  }
+  // sizes[250] at offset 1400, u16 each
+  for (let i = 0; i < 250; i++) {
+    if (i < sizes.length) view.setUint16(1400 + i * 2, sizes[i], true)
+  }
+  // Type C convention: sizes[0] holds the animation frame count
+  if (config.animationFrames > 0) {
+    view.setUint16(1400, config.animationFrames, true)
+  }
+
+  // ----- blob payload -----
+  let p = TYPE_C_HEADER_SIZE
+  for (const blob of compressedBlobs) {
+    out.set(blob, p)
+    p += blob.byteLength
+  }
+
+  return out
+}
