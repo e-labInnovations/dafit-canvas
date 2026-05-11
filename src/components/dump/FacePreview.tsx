@@ -6,11 +6,11 @@ type Props = {
   header: FaceHeader
   blobs: DecodedBlob[]
   dummy: DummyState
+  /** CSS-pixel multiplier over native blob resolution. Defaults to 2. */
+  scale?: number
 }
 
-const DISPLAY_SCALE = 2
-
-function FacePreview({ header, blobs, dummy }: Props) {
+function FacePreview({ header, blobs, dummy, scale = 2 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -19,9 +19,9 @@ function FacePreview({ header, blobs, dummy }: Props) {
     const { width, height } = renderFace(canvas, header, blobs, dummy)
     // Drive display size from native pixels so non-square watch screens
     // (e.g. 240×280) preview at the correct aspect.
-    canvas.style.width = `${width * DISPLAY_SCALE}px`
-    canvas.style.height = `${height * DISPLAY_SCALE}px`
-  }, [header, blobs, dummy])
+    canvas.style.width = `${width * scale}px`
+    canvas.style.height = `${height * scale}px`
+  }, [header, blobs, dummy, scale])
 
   return (
     <div className="face-preview-frame">

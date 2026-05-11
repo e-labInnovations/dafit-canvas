@@ -131,6 +131,12 @@
   margin-bottom: 16px;
 }
 
+.faces-loading {
+  display: flex;
+  justify-content: center;
+  padding: 32px 0;
+}
+
 .faces-error {
   color: #d33;
   font-size: 14px;
@@ -573,6 +579,123 @@
   font-size: 13px;
   color: var(--text);
   margin-top: 6px;
+}
+
+.upload-progress-watch {
+  display: flex;
+  justify-content: center;
+  padding: 16px 0 8px;
+}
+
+.upload-preview {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--social-bg);
+
+  @media (max-width: 720px) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.upload-preview-info {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+
+  .format-badge {
+    align-self: flex-start;
+  }
+}
+
+.loader-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.loader {
+  display: block;
+}
+
+.loader-button { fill: var(--text); opacity: 0.45; }
+.loader-band   { fill: var(--border); }
+.loader-case-outer { fill: var(--text-h); opacity: 0.85; }
+.loader-case-inner { fill: var(--code-bg); }
+.loader-face       { fill: var(--bg); }
+.loader-bezel  { stroke: var(--border); stroke-width: 0.5; }
+.loader-track  { stroke: var(--border); stroke-width: 1; opacity: 0.5; }
+
+.loader-arc {
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  stroke-dasharray: 18 45;
+  stroke-linecap: round;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: loader-spin 1.4s linear infinite;
+}
+
+.loader-dot {
+  fill: var(--accent);
+  animation: loader-breathe 1.8s ease-in-out infinite;
+}
+
+.loader-progress-arc {
+  stroke: var(--accent);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  transform-box: fill-box;
+  transform-origin: center;
+  /* Start the arc at 12 o'clock and grow clockwise. */
+  transform: rotate(-90deg);
+  transition: stroke-dasharray 0.2s ease-out;
+
+  &.is-done {
+    stroke: rgb(0, 180, 100);
+  }
+}
+
+.loader-percent {
+  fill: var(--text-h);
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 600;
+  transition: fill 0.2s ease-out;
+
+  &.is-done {
+    fill: rgb(0, 180, 100);
+  }
+}
+
+.loader-label {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+}
+
+@keyframes loader-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes loader-breathe {
+  0%, 100% { opacity: 0.9; }
+  50%      { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loader-arc, .loader-dot {
+    animation: none;
+  }
 }
 
 .editor {

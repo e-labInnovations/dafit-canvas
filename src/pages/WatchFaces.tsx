@@ -11,6 +11,7 @@ import {
   ZoomIn,
 } from 'lucide-react'
 import FacePreviewModal from '../components/FacePreviewModal'
+import Loader from '../components/Loader'
 import {
   DEFAULT_FACES_QUERY,
   type FacesQuery,
@@ -164,7 +165,11 @@ function WatchFaces() {
         </div>
       </form>
 
-      {loading && <p>Loading…</p>}
+      {loading && (
+        <div className="faces-loading">
+          <Loader label="Loading faces…" />
+        </div>
+      )}
       {error && <p className="faces-error">Error: {error}</p>}
 
       {data && !loading && (

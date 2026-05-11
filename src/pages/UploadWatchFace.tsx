@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Battery,
@@ -10,6 +10,9 @@ import {
   Unplug,
   Upload,
 } from 'lucide-react'
+import FacePreview from '../components/dump/FacePreview'
+import FacePreviewN from '../components/dump/FacePreviewN'
+import Loader from '../components/Loader'
 import {
   MoyoungWatch,
   isWebBluetoothSupported,
@@ -17,8 +20,20 @@ import {
   type UploadProgress,
   type UploadResult,
 } from '../lib/moyoungBle'
+import {
+  decodeFile,
+  type DecodedBlob,
+  type FaceHeader,
+} from '../lib/dawft'
+import { detectFormat, parseFaceN, type FaceN } from '../lib/faceN'
+import { defaultDummy } from '../lib/renderFace'
+import { defaultDummyN, type DummyStateN } from '../lib/renderFaceN'
 
 type Status = 'idle' | 'connecting' | 'uploading' | 'done' | 'error'
+
+type ParsedFile =
+  | { format: 'typeC'; header: FaceHeader; blobs: DecodedBlob[] }
+  | { format: 'faceN'; face: FaceN }
 
 const formatBytes = (n: number): string => {
   if (n < 1024) return `${n} B`
@@ -35,6 +50,13 @@ function UploadWatchFace() {
   const [progress, setProgress] = useState<UploadProgress | null>(null)
   const [result, setResult] = useState<UploadResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [parsedFile, setParsedFile] = useState<ParsedFile | null>(null)
+  const [parseError, setParseError] = useState<string | null>(null)
+
+  // Static dummy state for the preview (current local time). Live controls
+  // belong on /dump; here we just need a recognizable rendering for visual
+  // confirmation.
+  const dummy = useMemo<DummyStateN>(() => defaultDummyN(defaultDummy()), [])
 
   useEffect(() => {
     return () => {
@@ -97,12 +119,33 @@ function UploadWatchFace() {
     }
   }
 
-  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null
     setFile(f)
     setResult(null)
     setError(null)
+    setParsedFile(null)
+    setParseError(null)
     if (status === 'done' || status === 'error') setStatus('idle')
+    if (!f) return
+
+    try {
+      const data = new Uint8Array(await f.arrayBuffer())
+      const fmt = detectFormat(data)
+      if (fmt === 'typeC') {
+        const { header, blobs } = decodeFile(data)
+        setParsedFile({ format: 'typeC', header, blobs })
+      } else if (fmt === 'faceN') {
+        const face = parseFaceN(data)
+        setParsedFile({ format: 'faceN', face })
+      } else {
+        setParseError(
+          `Unrecognized .bin format. First byte = 0x${data[0]?.toString(16).padStart(2, '0')}. Expected 0x81/0x04/0x84 (Type C) or a small u16 api_ver (FaceN).`,
+        )
+      }
+    } catch (err) {
+      setParseError(err instanceof Error ? err.message : String(err))
+    }
   }
 
   const percent = progress
@@ -196,6 +239,57 @@ function UploadWatchFace() {
           Build the <code>.bin</code> with{' '}
           <code>dawft create folder=&lt;extracted&gt; output.bin</code>.
         </p>
+
+        {parseError && (
+          <div className="banner banner-error">
+            <AlertTriangle size={18} aria-hidden />
+            <div>
+              <strong>Can't preview this file:</strong> {parseError}
+              <br />
+              Upload is disabled to avoid pushing an invalid file to the watch.
+            </div>
+          </div>
+        )}
+
+        {parsedFile && (
+          <div className="upload-preview">
+            <div className="upload-preview-info">
+              <span className="format-badge">
+                {parsedFile.format === 'typeC' ? 'Type C' : 'FaceN'}
+              </span>
+              {parsedFile.format === 'typeC' && (
+                <dl className="device-details">
+                  <dt>faceNumber</dt>
+                  <dd>{parsedFile.header.faceNumber}</dd>
+                  <dt>dataCount</dt>
+                  <dd>{parsedFile.header.dataCount}</dd>
+                  <dt>blobCount</dt>
+                  <dd>{parsedFile.header.blobCount}</dd>
+                </dl>
+              )}
+              {parsedFile.format === 'faceN' && (
+                <dl className="device-details">
+                  <dt>api_ver</dt>
+                  <dd>{parsedFile.face.header.apiVer}</dd>
+                  <dt>digit sets</dt>
+                  <dd>{parsedFile.face.digitSets.length}</dd>
+                  <dt>elements</dt>
+                  <dd>{parsedFile.face.elements.length}</dd>
+                </dl>
+              )}
+            </div>
+            {parsedFile.format === 'typeC' ? (
+              <FacePreview
+                header={parsedFile.header}
+                blobs={parsedFile.blobs}
+                dummy={dummy}
+                scale={1}
+              />
+            ) : (
+              <FacePreviewN face={parsedFile.face} dummy={dummy} scale={1} />
+            )}
+          </div>
+        )}
       </div>
 
       <div className="upload-section">
@@ -204,31 +298,24 @@ function UploadWatchFace() {
           type="button"
           className="counter"
           onClick={handleUpload}
-          disabled={!connected || !file || uploading}
+          disabled={!connected || !parsedFile || uploading}
         >
           <Upload size={16} aria-hidden />
           {uploading ? 'Uploading…' : 'Send to watch'}
         </button>
 
         {(progress || status === 'done') && (
-          <div className="progress-wrap" aria-live="polite">
-            <div
-              className="progress-bar"
-              role="progressbar"
-              aria-valuenow={percent}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            >
-              <div
-                className={`progress-fill ${status === 'done' ? 'done' : ''}`}
-                style={{ width: `${percent}%` }}
-              />
-            </div>
-            <p className="progress-meta">
-              {progress
-                ? `${percent}% · chunk ${progress.chunkIndex} / ${progress.totalChunks} · ${formatBytes(progress.bytesSent)} of ${formatBytes(progress.totalBytes)}`
-                : '100% · finalizing'}
-            </p>
+          <div className="upload-progress-watch" aria-live="polite">
+            <Loader
+              size={140}
+              progress={percent}
+              done={status === 'done'}
+              label={
+                progress
+                  ? `chunk ${progress.chunkIndex} / ${progress.totalChunks} · ${formatBytes(progress.bytesSent)} of ${formatBytes(progress.totalBytes)}`
+                  : 'finalizing…'
+              }
+            />
           </div>
         )}
 
