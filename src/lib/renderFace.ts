@@ -69,16 +69,17 @@ const drawDigits = (
   let startX: number
   switch (align) {
     case 'L':
+      // fd.x is the left edge of the rendered text.
       startX = fd.x
       break
     case 'R':
-      // (x, y) anchors the rightmost digit's cell — render the value flowing
-      // left from there. Approximation: the watch firmware probably treats
-      // (x, w) as the field's right edge; this is close enough for preview.
-      startX = fd.x + fd.w - totalW
+      // fd.x is the right edge — text grows leftward from it.
+      startX = fd.x - totalW
       break
     case 'C':
-      startX = fd.x + (fd.w - totalW) / 2
+      // fd.x is the horizontal center of the rendered text. Matches
+      // extrathundertool's `drawAlignedNumber` convention used by FaceN.
+      startX = fd.x - Math.floor(totalW / 2)
       break
   }
   for (let k = 0; k < s.length; k++) {

@@ -14,15 +14,32 @@ const rgbaToDataUrl = (
   height: number,
 ): string => {
   if (!rgba || width === 0 || height === 0) return ''
-  const canvas = document.createElement('canvas')
-  canvas.width = width
-  canvas.height = height
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return ''
-  const imgData = ctx.createImageData(width, height)
-  imgData.data.set(rgba)
-  ctx.putImageData(imgData, 0, 0)
-  return canvas.toDataURL('image/png')
+  // A blob's decoded `rgba` length should equal `width * height * 4`. If it
+  // doesn't (e.g., a buffer that survived a re-encode/decode with different
+  // dims) `imgData.data.set(rgba)` throws RangeError and React unmounts the
+  // whole AssetSection — which looks like "assets section is silently empty".
+  // Guard so we degrade to the "empty" placeholder instead.
+  const expected = width * height * 4
+  if (rgba.length !== expected) {
+    console.warn(
+      `[AssetSection] rgba length ${rgba.length} ≠ ${width}×${height}×4 (${expected}); rendering placeholder`,
+    )
+    return ''
+  }
+  try {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return ''
+    const imgData = ctx.createImageData(width, height)
+    imgData.data.set(rgba)
+    ctx.putImageData(imgData, 0, 0)
+    return canvas.toDataURL('image/png')
+  } catch (err) {
+    console.warn('[AssetSection] thumbnail render failed:', err)
+    return ''
+  }
 }
 
 function AssetRow({ asset }: { asset: AssetView }) {

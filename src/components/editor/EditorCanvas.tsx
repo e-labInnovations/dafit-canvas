@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import FacePreview from '../dump/FacePreview'
 import FacePreviewN from '../dump/FacePreviewN'
 import { useEditor } from '../../store/editorStore'
-import { listLayers } from '../../lib/projectIO'
+import { computeLayerBbox } from '../../lib/projectIO'
 
 // Native watch face is 240×240. We scale up to 2× by default (480px), but
 // shrink to fit when the column is narrower. MIN_SCALE = 1 means we never
@@ -46,11 +46,15 @@ function EditorCanvas() {
     return () => observer.disconnect()
   }, [])
 
-  const layers = useMemo(() => (project ? listLayers(project) : []), [project])
-
   if (!project) return null
 
-  const selected = selectedIdx !== null ? layers[selectedIdx] : undefined
+  // Renderer-accurate bbox: for multi-digit kinds (STEPS_B_CA, DAY_NUM, …)
+  // this expands to the full text width based on the current dummy value +
+  // alignment, matching what `drawDigits` paints.
+  const bbox =
+    selectedIdx !== null
+      ? computeLayerBbox(project, selectedIdx, dummy)
+      : null
 
   return (
     <div
@@ -71,21 +75,17 @@ function EditorCanvas() {
         )}
       </div>
 
-      {selected &&
-        selected.x !== null &&
-        selected.y !== null &&
-        selected.w !== null &&
-        selected.h !== null && (
-          <div
-            className="editor-selection-overlay"
-            style={{
-              left: selected.x * scale + FRAME_INSET,
-              top: selected.y * scale + FRAME_INSET,
-              width: selected.w * scale,
-              height: selected.h * scale,
-            }}
-          />
-        )}
+      {bbox && (
+        <div
+          className="editor-selection-overlay"
+          style={{
+            left: bbox.x * scale + FRAME_INSET,
+            top: bbox.y * scale + FRAME_INSET,
+            width: bbox.w * scale,
+            height: bbox.h * scale,
+          }}
+        />
+      )}
     </div>
   )
 }

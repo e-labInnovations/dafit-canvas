@@ -31,6 +31,8 @@ import {
   type ParsedElement,
   type ParsedWatchfaceJson,
 } from './faceN'
+import type { DummyState } from './renderFace'
+import type { DummyStateN } from './renderFaceN'
 import type {
   EditorProject,
   FaceNProject,
@@ -1274,3 +1276,185 @@ export const listDigitSets = (project: EditorProject): DigitSetView[] => {
 /** Suppress the "unused" warning on `swapImgRef` (TS6 lint catches the
  *  intermediate helper). It's exported indirectly via patchElementAsset. */
 void swapImgRef
+
+// ===================================================================
+// Phase 2 polish: renderer-accurate bbox for the selection overlay
+// ===================================================================
+
+/** Matches DIGIT_SPACING in renderFace.ts — kept in sync so the selection
+ *  overlay aligns exactly with what `drawDigits` paints. */
+const DIGIT_SPACING = 2
+
+type Align = 'L' | 'C' | 'R'
+
+const typeCAlignFor = (type: number): Align | null => {
+  // L-aligned digit kinds: padded 2-digit date fields + the base (no-suffix)
+  // multi-digit metric variants.
+  switch (type) {
+    case 0x11: // MONTH_NUM
+    case 0x6b: // MONTH_NUM_B
+    case 0x30: // DAY_NUM
+    case 0x6c: // DAY_NUM_B
+    case 0x12: // YEAR
+    case 0x62: // STEPS
+    case 0x72: // STEPS_B
+    case 0x76: // STEPS_GOAL
+    case 0x65: // HR
+    case 0x82: // HR_B
+    case 0x68: // KCAL
+    case 0x92: // KCAL_B
+    case 0xa2: // DIST
+    case 0xd2: // BATT
+      return 'L'
+    case 0x63: // STEPS_CA
+    case 0x73: // STEPS_B_CA
+    case 0x66: // HR_CA
+    case 0x83: // HR_B_CA
+    case 0x93: // KCAL_B_CA
+    case 0xa3: // DIST_CA
+    case 0xd3: // BATT_CA
+      return 'C'
+    case 0x64: // STEPS_RA
+    case 0x74: // STEPS_B_RA
+    case 0x67: // HR_RA
+    case 0x84: // HR_B_RA
+    case 0x94: // KCAL_B_RA
+    case 0xa4: // DIST_RA
+    case 0xd4: // BATT_RA
+      return 'R'
+  }
+  return null
+}
+
+const typeCValueFor = (
+  type: number,
+  dummy: DummyState,
+): { value: number; padTo: number } | null => {
+  switch (type) {
+    case 0x11:
+    case 0x6b:
+      return { value: dummy.month, padTo: 2 }
+    case 0x30:
+    case 0x6c:
+      return { value: dummy.day, padTo: 2 }
+    case 0x12:
+      return { value: dummy.year % 100, padTo: 2 }
+    case 0x62:
+    case 0x63:
+    case 0x64:
+    case 0x72:
+    case 0x73:
+    case 0x74:
+      return { value: dummy.steps, padTo: 1 }
+    case 0x76:
+      return { value: 10000, padTo: 1 }
+    case 0x65:
+    case 0x66:
+    case 0x67:
+    case 0x82:
+    case 0x83:
+    case 0x84:
+      return { value: dummy.hr, padTo: 1 }
+    case 0x68:
+    case 0x92:
+    case 0x93:
+    case 0x94:
+      return { value: dummy.kcal, padTo: 1 }
+    case 0xa2:
+    case 0xa3:
+    case 0xa4:
+      return { value: dummy.distance, padTo: 1 }
+    case 0xd2:
+    case 0xd3:
+    case 0xd4:
+      return { value: dummy.battery, padTo: 1 }
+  }
+  return null
+}
+
+const typeCDigitsBbox = (
+  fd: FaceDataEntry,
+  dummy: DummyState,
+): { x: number; y: number; w: number; h: number } | null => {
+  const align = typeCAlignFor(fd.type)
+  const info = typeCValueFor(fd.type, dummy)
+  if (!align || !info) return null
+  const s = String(Math.max(0, Math.floor(info.value))).padStart(info.padTo, '0')
+  const totalW = s.length * fd.w + (s.length - 1) * DIGIT_SPACING
+  let startX: number
+  switch (align) {
+    case 'L':
+      startX = fd.x
+      break
+    case 'R':
+      startX = fd.x - totalW
+      break
+    case 'C':
+      startX = fd.x - Math.floor(totalW / 2)
+      break
+  }
+  return { x: startX, y: fd.y, w: totalW, h: fd.h }
+}
+
+/** Renderer-accurate bounding box for the selection overlay. For single-blob
+ *  layers it matches the stored (fd.x, fd.y, fd.w, fd.h). For multi-digit
+ *  kinds it mirrors `drawDigits` — total width across all digits + spacing,
+ *  shifted left for centered/right-aligned variants. Returns null when the
+ *  layer has no meaningful single bbox (e.g., background strips, unknown). */
+export const computeLayerBbox = (
+  project: EditorProject,
+  layerIdx: number,
+  dummy: DummyStateN,
+): { x: number; y: number; w: number; h: number } | null => {
+  if (project.format === 'typeC') {
+    const fd = project.header.faceData[layerIdx]
+    if (!fd) return null
+    const digits = typeCDigitsBbox(fd, dummy)
+    if (digits) return digits
+    if (fd.w > 0 && fd.h > 0) {
+      return { x: fd.x, y: fd.y, w: fd.w, h: fd.h }
+    }
+    return null
+  }
+
+  const el = project.face.elements[layerIdx]
+  if (!el) return null
+  switch (el.kind) {
+    case 'Image':
+      return { x: el.x, y: el.y, w: el.img.width, h: el.img.height }
+    case 'DayName': {
+      // FaceN renders the active weekday's image at (x,y). dummy.dow is the
+      // index; fall back to the widest image so the overlay still looks right.
+      const img = el.imgs[dummy.dow] ?? el.imgs[0]
+      if (!img) return null
+      return { x: el.x, y: el.y, w: img.width, h: img.height }
+    }
+    case 'BatteryFill':
+      return { x: el.x, y: el.y, w: el.bgImg.width, h: el.bgImg.height }
+    case 'TimeHand':
+      return { x: el.x, y: el.y, w: el.img.width, h: el.img.height }
+    case 'Dash':
+      // Dash has no position field — overlay rooted at (0,0) is the best we
+      // can offer until the format documents one.
+      return el.img.width > 0
+        ? { x: 0, y: 0, w: el.img.width, h: el.img.height }
+        : null
+    case 'BarDisplay':
+    case 'Weather': {
+      const img = el.imgs[0]
+      if (!img) return null
+      return { x: el.x, y: el.y, w: img.width, h: img.height }
+    }
+    case 'HeartRateNum':
+    case 'StepsNum':
+    case 'KCalNum':
+    case 'DayNum':
+    case 'MonthNum':
+    case 'TimeNum':
+    case 'Unknown29':
+    case 'Unknown':
+      // These reference a shared digit set and don't carry a single bbox; the
+      // overlay is hidden for them in Phase 2.
+      return null
+  }
+}
