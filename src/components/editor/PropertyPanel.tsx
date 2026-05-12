@@ -1,8 +1,15 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
+import { Type } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
-import { listLayers } from '../../lib/projectIO'
+import {
+  TYPEC_FONT_INSERTABLE,
+  compatibleSetsForType,
+  glyphsForTypeCType,
+  listLayers,
+} from '../../lib/projectIO'
 import { SCREEN_H, SCREEN_W } from '../../types/face'
 import AssetSection from './AssetSection'
+import FontGenerator, { type FontTarget } from './FontGenerator'
 import type { FaceN } from '../../lib/faceN'
 
 type FNEl = FaceN['elements'][number]
@@ -276,43 +283,108 @@ function FaceNFields({ idx, el }: { idx: number; el: FNEl }) {
 function TypeCFields({ idx }: { idx: number }) {
   const project = useEditor((s) => s.project)
   const setLayerPosition = useEditor((s) => s.setLayerPosition)
-  const patch = useEditor((s) => s.patchFaceData)
+  const rebindLayer = useEditor((s) => s.rebindLayerAction)
+  const detachLayer = useEditor((s) => s.detachLayerAction)
   if (!project || project.format !== 'typeC') return null
-  const fd = project.header.faceData[idx]
-  if (!fd) return null
+  const layer = project.layers[idx]
+  if (!layer) return null
+  const set = project.assetSets.find((s) => s.id === layer.assetSetId)
+  const consumers = project.layers.filter((l) => l.assetSetId === layer.assetSetId)
+  const shareCount = consumers.length - 1
+
+  // Sets the user can rebind this layer to (same expected slot count).
+  const compatible = compatibleSetsForType(project, layer.type)
   return (
     <>
       <div className="prop-row">
         <NumField
           label="x"
-          value={fd.x}
-          onChange={(x) => setLayerPosition(idx, x, fd.y)}
+          value={layer.x}
+          onChange={(x) => setLayerPosition(idx, x, layer.y)}
           min={-SCREEN_W}
           max={SCREEN_W * 2}
         />
         <NumField
           label="y"
-          value={fd.y}
-          onChange={(y) => setLayerPosition(idx, fd.x, y)}
+          value={layer.y}
+          onChange={(y) => setLayerPosition(idx, layer.x, y)}
           min={-SCREEN_H}
           max={SCREEN_H * 2}
         />
       </div>
       <div className="prop-row">
-        <NumField label="w" value={fd.w} onChange={() => {}} disabled />
-        <NumField label="h" value={fd.h} onChange={() => {}} disabled />
+        <NumField label="w" value={set?.width ?? 0} onChange={() => {}} disabled />
+        <NumField label="h" value={set?.height ?? 0} onChange={() => {}} disabled />
       </div>
-      <NumField
-        label="idx (start blob)"
-        value={fd.idx}
-        onChange={(blobIdx) => patch(idx, { idx: blobIdx })}
-        min={0}
-      />
+      <label className="prop-field">
+        <span>Asset set</span>
+        <select
+          value={layer.assetSetId}
+          onChange={(e) => rebindLayer(idx, e.target.value)}
+        >
+          {compatible.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name} ({s.width}×{s.height})
+              {project.layers.filter((l) => l.assetSetId === s.id).length > 1
+                ? ' · shared'
+                : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+      {shareCount > 0 ? (
+        <div className="prop-row">
+          <p className="prop-meta">
+            Shared with <strong>{shareCount}</strong> other layer
+            {shareCount === 1 ? '' : 's'}.
+          </p>
+          <button
+            type="button"
+            className="counter ghost"
+            onClick={() => detachLayer(idx)}
+            title="Clone the set so this layer has its own exclusive copy"
+          >
+            Detach
+          </button>
+        </div>
+      ) : (
+        <p className="prop-meta">Exclusive to this layer.</p>
+      )}
       <p className="hint">
-        w/h reflect the bound BMP. Replace a BMP under Assets to change them.
+        Switching sets re-binds this layer without touching the others. Use{' '}
+        <strong>Detach</strong> to fork a shared set before editing.
       </p>
     </>
   )
+}
+
+/** Returns the FontGenerator target appropriate for the selected layer, or
+ *  null when font generation doesn't apply (single-blob backgrounds, hands,
+ *  progress bars, FaceN element kinds that own arbitrary art, etc.). */
+const fontTargetForLayer = (
+  project: ReturnType<typeof useEditor.getState>['project'],
+  layerIdx: number,
+): FontTarget | null => {
+  if (!project) return null
+  if (project.format === 'typeC') {
+    const layer = project.layers[layerIdx]
+    if (!layer) return null
+    const glyphs = glyphsForTypeCType(layer.type)
+    if (!glyphs) return null
+    const name =
+      TYPEC_FONT_INSERTABLE.find((k) => k.type === layer.type)?.name ??
+      `0x${layer.type.toString(16)}`
+    return {
+      mode: 'replace-typeC-asset-set',
+      setId: layer.assetSetId,
+      type: layer.type,
+      name,
+      glyphs,
+    }
+  }
+  // FaceN element kinds don't carry glyph semantics directly — digit sets do,
+  // and the digit-set summary in LayerList handles regenerating those.
+  return null
 }
 
 function PropertyPanel() {
@@ -323,6 +395,11 @@ function PropertyPanel() {
   const layers = useMemo(() => (project ? listLayers(project) : []), [project])
   const layer = selectedIdx !== null ? layers[selectedIdx] : undefined
 
+  const [fontTarget, setFontTarget] = useState<FontTarget | null>(null)
+
+  const layerFontTarget =
+    layer && project ? fontTargetForLayer(project, layer.index) : null
+
   return (
     <aside className="editor-pane editor-props">
       <div className="editor-pane-scroll">
@@ -330,7 +407,7 @@ function PropertyPanel() {
       {project?.format === 'typeC' && (
         <NumField
           label="faceNumber"
-          value={project.header.faceNumber}
+          value={project.faceNumber}
           onChange={(n) => setFaceNumber(n)}
           min={1}
         />
@@ -362,10 +439,24 @@ function PropertyPanel() {
           )}
 
           <h3>Assets</h3>
+          {layerFontTarget && (
+            <button
+              type="button"
+              className="counter ghost prop-fontgen"
+              onClick={() => setFontTarget(layerFontTarget)}
+            >
+              <Type size={14} aria-hidden />
+              Generate from font
+            </button>
+          )}
           <AssetSection layerIdx={layer.index} />
         </>
       )}
       </div>
+      <FontGenerator
+        target={fontTarget}
+        onClose={() => setFontTarget(null)}
+      />
     </aside>
   )
 }

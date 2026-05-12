@@ -1,5 +1,12 @@
-// Project ↔ binary / zip plumbing for the editor. Sits between the editor
-// store (rich format-parsed shape) and the on-disk Type C / FaceN encoders.
+// Project ↔ binary/zip plumbing for the editor.
+//
+// Type C uses an "AssetSet" model (editor-side): layers reference reusable
+// asset sets by id, multiple layers can share one set. The binary on disk
+// stays exactly as dawft expects — we materialize layers + sets into
+// (FaceHeader, DecodedBlob[]) at render/export time.
+//
+// FaceN stays on the binary-parsed `FaceN` shape; digit sets are already
+// shared first-class assets there, and element-owned images stay inline.
 
 import JSZip from 'jszip'
 import { decodeBmp } from './bmp'
@@ -12,7 +19,6 @@ import {
   parseWatchfaceTxt,
   typeName,
   TYPE_C_HEADER_SIZE,
-  type Compression,
   type DecodedBlob,
   type FaceDataEntry,
   type FaceHeader,
@@ -34,39 +40,73 @@ import {
 import type { DummyState } from './renderFace'
 import type { DummyStateN } from './renderFaceN'
 import type {
+  AssetSet,
+  AssetSetKind,
+  AssetSlot,
   EditorProject,
   FaceNProject,
+  TypeCLayer,
   TypeCProject,
   WatchFormat,
 } from '../types/face'
 
 type DecodedBitmap = { width: number; height: number; rgba: Uint8ClampedArray }
 
-// ---------- empty projects (for "New") ----------
+// ---------- id helpers ----------
 
-const blankFaceData = (): FaceDataEntry => ({
-  type: 0,
-  idx: 0,
-  x: 0,
-  y: 0,
-  w: 0,
-  h: 0,
-})
+let idCounter = 0
+const nextId = (prefix: string): string => {
+  idCounter += 1
+  return `${prefix}_${Date.now().toString(36)}_${idCounter}`
+}
+
+// ---------- type semantics ----------
+
+/** Map a Type C type code to its semantic asset-set kind. Used to label sets
+ *  in the AssetLibrary and pick FontGenerator presets. */
+export const kindForType = (type: number): AssetSetKind => {
+  if (type === 0x01) return 'image' // BACKGROUND
+  if (type >= 0xf1 && type <= 0xf5) return 'hand' // HAND_*
+  if (type === 0xf0) return 'image' // SEPERATOR
+  if (type === 0x10) return 'month-names'
+  if (type === 0x60 || type === 0x61) return 'day-names'
+  if (type === 0x45 || type === 0x46) return 'label' // AM/PM
+  if (type === 0xa5 || type === 0xa6) return 'label' // DIST_KM/MI
+  if (type === 0xc0 || type === 0xc1) return 'image' // BTLINK_*
+  if (
+    type === 0x71 ||
+    type === 0x81 ||
+    type === 0x91 ||
+    type === 0xa1 ||
+    type === 0xce ||
+    type === 0xd0 ||
+    type === 0xd1 ||
+    type === 0xda
+  )
+    return 'image' // logos / battery icons
+  if (type === 0x70 || type === 0x80 || type === 0x90 || type === 0xa0)
+    return 'progbar'
+  if (type >= 0xf6 && type <= 0xf8) return 'animation'
+  if (type === 0x00) return 'image' // BACKGROUNDS strip
+  // Everything else with TYPE_TABLE entry = digit-ish set.
+  return 'digits'
+}
+
+const defaultSetName = (type: number): string => {
+  const name = typeName(type)
+  return name === 'UNKNOWN' ? `Type 0x${type.toString(16)}` : name
+}
+
+// ---------- empty / starter projects ----------
 
 export const emptyTypeCProject = (faceNumber = 50001): TypeCProject => ({
   format: 'typeC',
   fileName: null,
-  header: {
-    fileID: 0x81,
-    dataCount: 0,
-    blobCount: 0,
-    faceNumber,
-    faceData: Array.from({ length: 39 }, blankFaceData),
-    offsets: Array.from({ length: 250 }, () => 0),
-    sizes: Array.from({ length: 250 }, () => 0),
-    animationFrames: 0,
-  },
-  blobs: [],
+  fileID: 0x81,
+  faceNumber,
+  animationFrames: 0,
+  layers: [],
+  assetSets: [],
 })
 
 export const emptyFaceNProject = (): FaceNProject => ({
@@ -91,15 +131,169 @@ export const emptyFaceNProject = (): FaceNProject => ({
 export const emptyProject = (format: WatchFormat): EditorProject =>
   format === 'typeC' ? emptyTypeCProject() : emptyFaceNProject()
 
-// ---------- import: bin ----------
+// ---------- materialize TypeC → renderer-compatible shape ----------
+
+type Materialized = {
+  header: FaceHeader
+  blobs: DecodedBlob[]
+  /** assetSetId → starting blob index in the materialized array. */
+  setStartIdx: Map<string, number>
+}
+
+const blankFaceData = (): FaceDataEntry => ({
+  type: 0,
+  idx: 0,
+  x: 0,
+  y: 0,
+  w: 0,
+  h: 0,
+})
+
+/** Flatten a TypeCProject into the (FaceHeader, DecodedBlob[]) pair the
+ *  binary renderer + packer expect. Only **consumed** asset sets (sets that
+ *  at least one layer references) are emitted into the blob array — orphan
+ *  sets remain in `project.assetSets` for the user's library but are
+ *  excluded from the .bin so the firmware doesn't ship dead pixels. ZIP
+ *  exports include orphans via the side-file path (see `exportTypeCZip`). */
+export const materializeTypeC = (project: TypeCProject): Materialized => {
+  const setStartIdx = new Map<string, number>()
+  const blobs: DecodedBlob[] = []
+  let cursor = 0
+
+  const consumed = project.assetSets.filter((set) =>
+    project.layers.some((l) => l.assetSetId === set.id),
+  )
+
+  for (const set of consumed) {
+    setStartIdx.set(set.id, cursor)
+    // Find a representative consumer to label this set's blobs with `type`.
+    const firstConsumer = project.layers.find((l) => l.assetSetId === set.id)
+    const type = firstConsumer?.type ?? null
+    const tName = type !== null ? typeName(type) : 'UNKNOWN'
+    for (let i = 0; i < set.count; i++) {
+      const slot = set.slots[i]
+      const rgba = slot?.rgba ?? null
+      blobs.push({
+        index: cursor,
+        faceDataIdx: null, // filled below once layer order is decided
+        type,
+        typeName: tName,
+        width: set.width,
+        height: set.height,
+        compression: 'RLE_LINE',
+        rawSize: set.width * set.height * 2,
+        rgba,
+        raw: new Uint8Array(0),
+      })
+      cursor++
+    }
+  }
+
+  // Build faceData (39 entries, first N from layers, rest blank).
+  const faceData: FaceDataEntry[] = Array.from({ length: 39 }, blankFaceData)
+  project.layers.forEach((layer, layerIdx) => {
+    const set = project.assetSets.find((s) => s.id === layer.assetSetId)
+    if (!set) return
+    const start = setStartIdx.get(layer.assetSetId) ?? 0
+    faceData[layerIdx] = {
+      type: layer.type,
+      idx: start,
+      x: layer.x,
+      y: layer.y,
+      w: set.width,
+      h: set.height,
+    }
+    // Stamp the first consumer's index onto its blobs (helpful for the asset
+    // section / `findFaceDataIdx`-style logic in callers).
+    for (let i = 0; i < set.count; i++) {
+      const b = blobs[start + i]
+      if (b && b.faceDataIdx === null) b.faceDataIdx = layerIdx
+    }
+  })
+
+  const header: FaceHeader = {
+    fileID: project.fileID,
+    dataCount: project.layers.length,
+    blobCount: blobs.length,
+    faceNumber: project.faceNumber,
+    faceData,
+    offsets: Array.from({ length: 250 }, () => 0),
+    sizes: Array.from({ length: 250 }, () => 0),
+    animationFrames: project.animationFrames,
+  }
+
+  return { header, blobs, setStartIdx }
+}
+
+// ---------- import: binary → TypeCProject ----------
+
+/** Heuristic: two faceData entries point at the same AssetSet iff they have
+ *  the same (idx, blobCount) pair. Anything else (overlap without exact
+ *  match) gets its own set. */
+const decodeTypeCBin = (data: Uint8Array, fileName: string): TypeCProject => {
+  const { header, blobs } = decodeFile(data)
+
+  // Group faceData entries by (idx, count).
+  const setKey = (idx: number, count: number): string => `${idx}:${count}`
+  const groupForKey = new Map<string, AssetSet>()
+  const layerToKey: { layer: TypeCLayer; key: string }[] = []
+
+  for (let i = 0; i < header.dataCount; i++) {
+    const fd = header.faceData[i]
+    const count = blobCountForType(fd.type, header.animationFrames)
+    const key = setKey(fd.idx, count)
+
+    if (!groupForKey.has(key)) {
+      const slots: AssetSlot[] = []
+      // Pick blob-recorded w/h if available (covers blobs whose `type` was
+      // overridden by `findFaceDataIdx`'s first match).
+      const firstBlob = blobs[fd.idx]
+      const w = firstBlob?.width ?? fd.w
+      const h = firstBlob?.height ?? fd.h
+      for (let j = 0; j < count; j++) {
+        const blob = blobs[fd.idx + j]
+        slots.push({ rgba: blob?.rgba ?? null })
+      }
+      groupForKey.set(key, {
+        id: nextId('asset'),
+        name: defaultSetName(fd.type),
+        width: w ?? 0,
+        height: h ?? 0,
+        count,
+        kind: kindForType(fd.type),
+        slots,
+      })
+    }
+    const set = groupForKey.get(key)!
+    layerToKey.push({
+      layer: {
+        id: nextId('layer'),
+        type: fd.type,
+        x: fd.x,
+        y: fd.y,
+        assetSetId: set.id,
+      },
+      key,
+    })
+  }
+
+  return {
+    format: 'typeC',
+    fileName,
+    fileID: header.fileID,
+    faceNumber: header.faceNumber,
+    animationFrames: header.animationFrames,
+    layers: layerToKey.map((e) => e.layer),
+    assetSets: Array.from(groupForKey.values()),
+  }
+}
+
+// ---------- import: file → EditorProject ----------
 
 export const importBin = async (file: File): Promise<EditorProject> => {
   const data = new Uint8Array(await file.arrayBuffer())
   const fmt = detectFormat(data)
-  if (fmt === 'typeC') {
-    const { header, blobs } = decodeFile(data)
-    return { format: 'typeC', fileName: file.name, header, blobs }
-  }
+  if (fmt === 'typeC') return decodeTypeCBin(data, file.name)
   if (fmt === 'faceN') {
     const face = parseFaceN(data)
     return { format: 'faceN', fileName: file.name, face }
@@ -109,11 +303,8 @@ export const importBin = async (file: File): Promise<EditorProject> => {
   )
 }
 
-// ---------- import: zip ----------
+// ---------- import: ZIP ----------
 
-/** Load every BMP + RAW entry in the ZIP, keyed by both basename and by the
- *  trailing-number index (so dump-style "057.bmp" works alongside the FaceN
- *  filename scheme like "digit_0_3.bmp"). */
 type LoadedAssets = {
   byName: Map<string, DecodedBitmap>
   byNumber: Map<number, DecodedBitmap>
@@ -136,7 +327,6 @@ const loadZipAssets = async (zip: JSZip): Promise<LoadedAssets> => {
     const match = fileName.match(/(\d+)\.bmp$/i)
     if (match) byNumber.set(parseInt(match[1], 10), bitmap)
   }
-
   const rawEntries = Object.values(zip.files).filter(
     (f) => !f.dir && /\.raw$/i.test(f.name),
   )
@@ -146,7 +336,6 @@ const loadZipAssets = async (zip: JSZip): Promise<LoadedAssets> => {
     const match = fileName.match(/(\d+)\.raw$/i)
     if (match) rawByNumber.set(parseInt(match[1], 10), data)
   }
-
   return { byName, byNumber, rawByNumber }
 }
 
@@ -154,6 +343,12 @@ const padIdx = (n: number) => String(n).padStart(3, '0')
 
 export const importZip = async (file: File): Promise<EditorProject> => {
   const zip = await JSZip.loadAsync(file)
+  // Prefer the editor's own side-file when present — it carries orphan asset
+  // sets and exact layer/set wiring that watchface.txt can't represent.
+  const projectEntry = zip.file(/project\.json$/i)[0]
+  if (projectEntry) {
+    return restoreFromProjectJson(zip, file.name)
+  }
   const txtEntry = zip.file(/watchface\.txt$/i)[0]
   const jsonEntry = zip.file(/watchface\.json$/i)[0]
   if (!txtEntry && !jsonEntry) {
@@ -161,7 +356,6 @@ export const importZip = async (file: File): Promise<EditorProject> => {
       'ZIP must contain watchface.txt (Type C) or watchface.json (FaceN).',
     )
   }
-
   const assets = await loadZipAssets(zip)
 
   if (txtEntry) {
@@ -188,11 +382,9 @@ export const importZip = async (file: File): Promise<EditorProject> => {
       throw new Error(`Missing ${padIdx(i)}.bmp or ${padIdx(i)}.raw for blob ${i}`)
     }
     const bin = packTypeC({ config, blobs: ordered })
-    const { header, blobs } = decodeFile(bin)
-    return { format: 'typeC', fileName: file.name, header, blobs }
+    return decodeTypeCBin(bin, file.name)
   }
 
-  // FaceN branch
   const txt = await jsonEntry!.async('string')
   const config = parseWatchfaceJson(txt)
   const bin = packFaceN({ config, bitmaps: assets.byName })
@@ -200,12 +392,12 @@ export const importZip = async (file: File): Promise<EditorProject> => {
   return { format: 'faceN', fileName: file.name, face }
 }
 
-// ---------- export: Type C bin / zip ----------
+// ---------- export: TypeC project → bin ----------
 
-/** Re-pack a Type C project to a fresh .bin. Re-uses the FaceHeader fields the
- *  editor mutates (faceData positions, faceNumber, etc.). */
+/** Re-pack a Type C project. Materializes the project (layers + assetSets →
+ *  blob array) and feeds the dawft encoder. */
 export const exportTypeCBin = (project: TypeCProject): Uint8Array => {
-  const { header, blobs } = project
+  const { header, blobs } = materializeTypeC(project)
   const activeFaceData = header.faceData
     .slice(0, header.dataCount)
     .map((fd) => ({ ...fd }))
@@ -226,9 +418,40 @@ export const exportTypeCBin = (project: TypeCProject): Uint8Array => {
   return packTypeC({ config, blobs: packBlobs })
 }
 
+/** Side-file schema that lives next to watchface.txt in the ZIP, capturing
+ *  the full editor state — including orphan asset sets that the .bin doesn't
+ *  carry. Re-imported on `importZip`, otherwise gracefully ignored by dawft. */
+type ProjectJsonV1 = {
+  version: 1
+  format: 'typeC'
+  fileID: number
+  faceNumber: number
+  animationFrames: number
+  fileName: string | null
+  layers: TypeCLayer[]
+  assetSets: {
+    id: string
+    name: string
+    width: number
+    height: number
+    count: number
+    kind: AssetSetKind
+    /** Filename per slot. Consumed slots map to `dbNNN.bmp`; orphans map to
+     *  `orphan_<setId>_<slotIdx>.bmp`. null means empty/no bitmap. */
+    slotFiles: (string | null)[]
+  }[]
+}
+
+const orphanSlotName = (setId: string, slotIdx: number): string =>
+  `orphan_${setId}_${slotIdx}.bmp`
+
 export const exportTypeCZip = async (project: TypeCProject): Promise<Blob> => {
-  const { header, blobs } = project
+  const { header, blobs, setStartIdx } = materializeTypeC(project)
   const zip = new JSZip()
+
+  // dawft-compatible payload: only consumed sets land in watchface.txt and
+  // the dbNNN.bmp sequence. Anything orphaned in the editor is excluded so
+  // the .bin (and the ZIP-derived .bin via dawft create) stays compact.
   zip.file('watchface.txt', buildWatchfaceTxt(header, blobs))
   for (const b of blobs) {
     const name = padIdx(b.index)
@@ -238,14 +461,119 @@ export const exportTypeCZip = async (project: TypeCProject): Promise<Blob> => {
       zip.file(`${name}.raw`, b.raw)
     }
   }
+
+  // Orphan slots travel in separately-named BMPs so dawft/firmware ignores
+  // them (no faceData entry references them) but the editor can recover them
+  // on re-import via project.json.
+  for (const set of project.assetSets) {
+    if (setStartIdx.has(set.id)) continue
+    for (let i = 0; i < set.count; i++) {
+      const slot = set.slots[i]
+      if (!slot.rgba || set.width === 0 || set.height === 0) continue
+      zip.file(
+        orphanSlotName(set.id, i),
+        encodeBmpRgb565(slot.rgba, set.width, set.height),
+      )
+    }
+  }
+
+  const projectJson: ProjectJsonV1 = {
+    version: 1,
+    format: 'typeC',
+    fileID: project.fileID,
+    faceNumber: project.faceNumber,
+    animationFrames: project.animationFrames,
+    fileName: project.fileName,
+    layers: project.layers,
+    assetSets: project.assetSets.map((set) => {
+      const start = setStartIdx.get(set.id)
+      const slotFiles = set.slots.map((slot, i): string | null => {
+        if (!slot.rgba) return null
+        if (start !== undefined) return `${padIdx(start + i)}.bmp`
+        return orphanSlotName(set.id, i)
+      })
+      return {
+        id: set.id,
+        name: set.name,
+        width: set.width,
+        height: set.height,
+        count: set.count,
+        kind: set.kind,
+        slotFiles,
+      }
+    }),
+  }
+  zip.file('project.json', JSON.stringify(projectJson, null, 2))
+
   return zip.generateAsync({ type: 'blob' })
 }
 
-// ---------- export: FaceN bin / zip ----------
+/** Reconstitute a TypeCProject from a `project.json` + BMP collection inside
+ *  a ZIP. Used by `importZip` when the side-file is present — it carries the
+ *  orphan asset sets that watchface.txt alone can't represent. */
+const restoreFromProjectJson = async (
+  zip: JSZip,
+  fileName: string,
+): Promise<TypeCProject> => {
+  const entry = zip.file(/project\.json$/i)[0]
+  if (!entry) throw new Error('project.json missing from ZIP')
+  const raw: unknown = JSON.parse(await entry.async('string'))
+  if (
+    !raw ||
+    typeof raw !== 'object' ||
+    (raw as { version?: unknown }).version !== 1 ||
+    (raw as { format?: unknown }).format !== 'typeC'
+  ) {
+    throw new Error('Unsupported project.json (version/format mismatch).')
+  }
+  const json = raw as ProjectJsonV1
 
-/** Convert an in-memory FaceN (binary-parsed) to a ParsedWatchfaceJson + the
- *  bitmap map needed by packFaceN. Filenames come from `collectBlobs` so the
- *  config + bitmaps always line up. */
+  const assetSets: AssetSet[] = []
+  for (const setJson of json.assetSets) {
+    const slots: AssetSlot[] = []
+    for (let i = 0; i < setJson.count; i++) {
+      const fn = setJson.slotFiles[i]
+      if (!fn) {
+        slots.push({ rgba: null })
+        continue
+      }
+      const file = zip.file(fn)
+      if (!file) {
+        slots.push({ rgba: null })
+        continue
+      }
+      try {
+        const bytes = await file.async('uint8array')
+        const bmp = decodeBmp(bytes)
+        slots.push({ rgba: bmp.rgba })
+      } catch {
+        slots.push({ rgba: null })
+      }
+    }
+    assetSets.push({
+      id: setJson.id,
+      name: setJson.name,
+      width: setJson.width,
+      height: setJson.height,
+      count: setJson.count,
+      kind: setJson.kind,
+      slots,
+    })
+  }
+
+  return {
+    format: 'typeC',
+    fileName,
+    fileID: json.fileID,
+    faceNumber: json.faceNumber,
+    animationFrames: json.animationFrames,
+    layers: json.layers,
+    assetSets,
+  }
+}
+
+// ---------- export: FaceN ----------
+
 const faceNToPackInput = (
   face: FaceN,
 ): { config: ParsedWatchfaceJson; bitmaps: Map<string, DecodedBitmap> } => {
@@ -256,7 +584,6 @@ const faceNToPackInput = (
       bitmaps.set(f.name, { width: f.width, height: f.height, rgba: f.rgba })
     }
   }
-
   const digitSets = face.digitSets.map((set, sIdx) => ({
     unknown: set.unknown,
     digits: set.digits.map((d, dIdx) => ({
@@ -265,19 +592,16 @@ const faceNToPackInput = (
       fileName: names.digits[sIdx]?.[dIdx] ?? null,
     })),
   }))
-
   const wh = (img: { width: number; height: number }, fileName: string | null) => ({
     w: img.width,
     h: img.height,
     fileName,
   })
-
   const pickFirst = (v: string | string[] | null | undefined, i: number): string | null => {
     if (Array.isArray(v)) return v[i] ?? null
     if (typeof v === 'string' && i === 0) return v
     return null
   }
-
   const elements: ParsedElement[] = face.elements.map((el, eIdx) => {
     const fname = names.elements[eIdx]
     switch (el.kind) {
@@ -360,11 +684,9 @@ const faceNToPackInput = (
       case 'Dash':
         return { kind: 'Dash', img: wh(el.img, pickFirst(fname, 0)) }
       case 'Unknown':
-        // Unknown elements can't be re-encoded; skip with a placeholder.
         return { kind: 'Unknown29', unknown: 0 }
     }
   })
-
   const config: ParsedWatchfaceJson = {
     apiVer: face.header.apiVer,
     unknown: face.header.unknown,
@@ -394,7 +716,7 @@ export const exportFaceNZip = async (project: FaceNProject): Promise<Blob> => {
   return zip.generateAsync({ type: 'blob' })
 }
 
-// ---------- unified export helpers (the editor calls these) ----------
+// ---------- unified export ----------
 
 export const exportBin = (project: EditorProject): Uint8Array =>
   project.format === 'typeC' ? exportTypeCBin(project) : exportFaceNBin(project)
@@ -409,8 +731,6 @@ export const downloadBlob = (data: Blob | Uint8Array, filename: string, mime?: s
   if (data instanceof Blob) {
     blob = data
   } else {
-    // Copy into a fresh ArrayBuffer-backed view so the Blob constructor accepts
-    // it under TS6's stricter `BlobPart` typing (which rejects ArrayBufferLike).
     const copy = new Uint8Array(data.byteLength)
     copy.set(data)
     blob = new Blob([copy.buffer], { type: mime ?? 'application/octet-stream' })
@@ -425,53 +745,47 @@ export const downloadBlob = (data: Blob | Uint8Array, filename: string, mime?: s
   URL.revokeObjectURL(url)
 }
 
-// ---------- layer helpers (shared between LayerList and PropertyPanel) ----------
+// ---------- layer helpers ----------
 
 export type LayerView = {
-  /** Index into the project's element array. */
+  /** Index into the project's layers array (Type C) or face.elements (FaceN). */
   index: number
-  /** Human-readable label. */
   name: string
-  /** Top-left x position. null for kinds without a meaningful single x. */
   x: number | null
   y: number | null
-  /** Inferred bounding box width/height. null if not directly stored. */
   w: number | null
   h: number | null
+  /** Type C only: the AssetSet this layer paints from. null for FaceN. */
+  assetSetId?: string
+  /** Type C only: how many other layers share this set. 0 means exclusive. */
+  shareCount?: number
 }
 
-/** Surface every editable layer in a project as a uniform list. For Type C we
- *  walk `header.faceData[0..dataCount]`; for FaceN we walk `face.elements`.
- *  Used by LayerList and PropertyPanel so they're format-agnostic. */
 export const listLayers = (project: EditorProject): LayerView[] => {
   if (project.format === 'typeC') {
-    return project.header.faceData
-      .slice(0, project.header.dataCount)
-      .map((fd, i) => ({
+    const consumerCount = new Map<string, number>()
+    for (const l of project.layers) {
+      consumerCount.set(l.assetSetId, (consumerCount.get(l.assetSetId) ?? 0) + 1)
+    }
+    return project.layers.map((layer, i) => {
+      const set = project.assetSets.find((s) => s.id === layer.assetSetId)
+      const hex = layer.type.toString(16).padStart(2, '0')
+      return {
         index: i,
-        name: typeNameLabel(fd),
-        x: fd.x,
-        y: fd.y,
-        w: fd.w,
-        h: fd.h,
-      }))
+        name: `${typeName(layer.type)} (0x${hex})`,
+        x: layer.x,
+        y: layer.y,
+        w: set?.width ?? null,
+        h: set?.height ?? null,
+        assetSetId: layer.assetSetId,
+        shareCount: (consumerCount.get(layer.assetSetId) ?? 1) - 1,
+      }
+    })
   }
   return project.face.elements.map((el, i) => {
     const pos = elementPosition(el)
-    return {
-      index: i,
-      name: faceNElementLabel(el, i),
-      x: pos.x,
-      y: pos.y,
-      w: pos.w,
-      h: pos.h,
-    }
+    return { index: i, name: faceNElementLabel(el, i), x: pos.x, y: pos.y, w: pos.w, h: pos.h }
   })
-}
-
-const typeNameLabel = (fd: FaceDataEntry): string => {
-  const hex = fd.type.toString(16).padStart(2, '0')
-  return `${typeName(fd.type)} (0x${hex})`
 }
 
 const elementPosition = (
@@ -481,7 +795,6 @@ const elementPosition = (
     case 'Image':
       return { x: el.x, y: el.y, w: el.img.width, h: el.img.height }
     case 'TimeNum':
-      // TimeNum has 4 per-digit XYs; surface the first as a reference point.
       return { x: el.xys[0].x, y: el.xys[0].y, w: null, h: null }
     case 'DayName':
       return { x: el.x, y: el.y, w: null, h: null }
@@ -507,35 +820,11 @@ const elementPosition = (
   }
 }
 
-const faceNElementLabel = (
-  el: FaceN['elements'][number],
-  i: number,
-): string => `${i}. ${el.kind}`
+const faceNElementLabel = (el: FaceN['elements'][number], i: number): string =>
+  `${i}. ${el.kind}`
 
-// ---------- mutation helpers ----------
+// ---------- position helpers ----------
 
-/** Patch x/y on the selected layer regardless of format. Returns a new project
- *  with the mutation applied. */
-export const movLayer = (
-  project: EditorProject,
-  index: number,
-  dx: number,
-  dy: number,
-): EditorProject => {
-  if (project.format === 'typeC') {
-    const faceData = project.header.faceData.map((fd, i) =>
-      i === index ? { ...fd, x: fd.x + dx, y: fd.y + dy } : fd,
-    )
-    return { ...project, header: { ...project.header, faceData } }
-  }
-  const elements = project.face.elements.map((el, i) => {
-    if (i !== index) return el
-    return shiftElement(el, dx, dy)
-  })
-  return { ...project, face: { ...project.face, elements } }
-}
-
-/** Set absolute x/y on the selected layer (no-op for kinds without xy). */
 export const setLayerXY = (
   project: EditorProject,
   index: number,
@@ -543,10 +832,8 @@ export const setLayerXY = (
   y: number,
 ): EditorProject => {
   if (project.format === 'typeC') {
-    const faceData = project.header.faceData.map((fd, i) =>
-      i === index ? { ...fd, x, y } : fd,
-    )
-    return { ...project, header: { ...project.header, faceData } }
+    const layers = project.layers.map((l, i) => (i === index ? { ...l, x, y } : l))
+    return { ...project, layers }
   }
   const elements = project.face.elements.map((el, i) => {
     if (i !== index) return el
@@ -571,10 +858,7 @@ const shiftElement = (el: FNEl, dx: number, dy: number): FNEl => {
       return { ...el, x: el.x + dx, y: el.y + dy }
     case 'TimeNum': {
       const xys = el.xys.map((p) => ({ x: p.x + dx, y: p.y + dy }))
-      return {
-        ...el,
-        xys: [xys[0], xys[1], xys[2], xys[3]],
-      }
+      return { ...el, xys: [xys[0], xys[1], xys[2], xys[3]] }
     }
     case 'DayNum':
     case 'MonthNum':
@@ -604,12 +888,7 @@ const setElementXY = (el: FNEl, x: number, y: number): FNEl => {
     case 'BarDisplay':
     case 'Weather':
       return { ...el, x, y }
-    case 'TimeNum': {
-      // Snap all 4 digit XYs by the delta from the first one (preserves spacing).
-      const dx = x - el.xys[0].x
-      const dy = y - el.xys[0].y
-      return shiftElement(el, dx, dy)
-    }
+    case 'TimeNum':
     case 'DayNum':
     case 'MonthNum': {
       const dx = x - el.xys[0].x
@@ -623,19 +902,19 @@ const setElementXY = (el: FNEl, x: number, y: number): FNEl => {
   }
 }
 
-/** Reorder a layer in the underlying array (Type C: faceData; FaceN: elements). */
+// ---------- reorder / delete ----------
+
 export const reorderLayer = (
   project: EditorProject,
   index: number,
   direction: 'up' | 'down',
 ): EditorProject => {
   if (project.format === 'typeC') {
-    const list = [...project.header.faceData]
-    const limit = project.header.dataCount
+    const list = [...project.layers]
     const target = direction === 'up' ? index + 1 : index - 1
-    if (target < 0 || target >= limit) return project
+    if (target < 0 || target >= list.length) return project
     ;[list[index], list[target]] = [list[target], list[index]]
-    return { ...project, header: { ...project.header, faceData: list } }
+    return { ...project, layers: list }
   }
   const list = [...project.face.elements]
   const target = direction === 'up' ? index + 1 : index - 1
@@ -644,39 +923,30 @@ export const reorderLayer = (
   return { ...project, face: { ...project.face, elements: list } }
 }
 
-/** Remove a layer entirely. For Type C we shrink dataCount so the freed slot
- *  is treated as unused (but blob payloads are kept — they're indexed by blob
- *  number, not by faceData slot). For FaceN we splice elements. */
+/** Remove a layer. Asset sets stay in the library regardless of consumer
+ *  count — orphan sets are excluded from the .bin at pack time (see
+ *  `materializeTypeC`) but preserved in editor state and ZIP exports. */
 export const deleteLayer = (
   project: EditorProject,
   index: number,
 ): EditorProject => {
   if (project.format === 'typeC') {
-    const list = [...project.header.faceData]
-    list.splice(index, 1)
-    list.push(blankFaceData())
-    return {
-      ...project,
-      header: {
-        ...project.header,
-        faceData: list,
-        dataCount: Math.max(0, project.header.dataCount - 1),
-      },
-    }
+    const layer = project.layers[index]
+    if (!layer) return project
+    const layers = project.layers.filter((_, i) => i !== index)
+    return { ...project, layers }
   }
   const elements = [...project.face.elements]
   elements.splice(index, 1)
   return { ...project, face: { ...project.face, elements } }
 }
 
-// ---------- preview rebuilder (round-trip preview through the encoder) ----------
+// ---------- preview rebuilder (used by /pack & legacy callers) ----------
 
-/** Pack the current Type C project and decode it back, so the preview is
- *  driven by exactly the bytes that would ship. Catches encoder bugs early. */
 export const rebuildTypeCPreview = (
   project: TypeCProject,
 ): { header: FaceHeader; blobs: DecodedBlob[] } | null => {
-  if (project.header.dataCount === 0 || project.header.blobCount === 0) return null
+  if (project.layers.length === 0) return null
   try {
     const bin = exportTypeCBin(project)
     if (bin.byteLength <= TYPE_C_HEADER_SIZE) return null
@@ -699,20 +969,17 @@ export const rebuildFaceNPreview = (project: FaceNProject): FaceN | null => {
 }
 
 // ===================================================================
-// Phase 2: asset enumeration + replace + insert
+// Asset model: enumeration + replace + insert + share + regenerate
 // ===================================================================
 
-/** A pointer to a single replaceable image slot inside a project. The tag lets
- *  callers patch the right field without re-walking the project tree. */
 export type AssetRef =
-  | { tag: 'typeC-blob'; blobIdx: number }
+  | { tag: 'typeC-slot'; setId: string; slotIdx: number }
   | { tag: 'faceN-preview' }
   | { tag: 'faceN-digit'; setIdx: number; digitIdx: number }
   | { tag: 'faceN-elem'; elementIdx: number; slotIdx: number }
 
 export type AssetView = {
   ref: AssetRef
-  /** Short human-readable label (e.g. "0 (TIME_H1)", "Mon", "bg"). */
   label: string
   width: number
   height: number
@@ -722,29 +989,22 @@ export type AssetView = {
 const dayNameLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const batteryFillLabels = ['bg', 'fill', 'mask']
 
-/** Return every replaceable asset owned by the given layer. Empty for kinds
- *  whose pixel data lives in a shared digit set (TimeNum, *Num). */
 export const listLayerAssets = (
   project: EditorProject,
   layerIdx: number,
 ): AssetView[] => {
   if (project.format === 'typeC') {
-    const fd = project.header.faceData[layerIdx]
-    if (!fd) return []
-    const count = blobCountForType(fd.type, project.header.animationFrames)
-    const out: AssetView[] = []
-    for (let i = 0; i < count; i++) {
-      const blobIdx = fd.idx + i
-      const blob = project.blobs[blobIdx]
-      out.push({
-        ref: { tag: 'typeC-blob', blobIdx },
-        label: `${blobIdx}${count > 1 ? ` (${i})` : ''}`,
-        width: blob?.width ?? 0,
-        height: blob?.height ?? 0,
-        rgba: blob?.rgba ?? null,
-      })
-    }
-    return out
+    const layer = project.layers[layerIdx]
+    if (!layer) return []
+    const set = project.assetSets.find((s) => s.id === layer.assetSetId)
+    if (!set) return []
+    return set.slots.map((slot, i) => ({
+      ref: { tag: 'typeC-slot', setId: set.id, slotIdx: i },
+      label: `${i}`,
+      width: set.width,
+      height: set.height,
+      rgba: slot.rgba,
+    }))
   }
 
   const el = project.face.elements[layerIdx]
@@ -818,46 +1078,23 @@ export const listLayerAssets = (
     case 'MonthNum':
     case 'Unknown29':
     case 'Unknown':
-      // These reference a shared digit set; no per-layer assets.
       return []
   }
 }
 
-// ---------- BMP file → DecodedBitmap helper ----------
+// ---------- BMP file → DecodedBitmap ----------
 
-/** Read a BMP file from disk and decode to RGBA. Throws on non-BMP. */
 export const decodeBmpFile = async (file: File): Promise<DecodedBitmap> => {
   const bytes = new Uint8Array(await file.arrayBuffer())
   const bmp = decodeBmp(bytes)
   return { width: bmp.width, height: bmp.height, rgba: bmp.rgba }
 }
 
-// ---------- asset replace ----------
+// ---------- replace asset ----------
 
 export type ReplaceOpts = {
-  /** If true, require the new BMP's dimensions to match the existing slot's
-   *  width/height. Set false when replacing an empty (w=h=0) slot. */
   requireDimMatch: boolean
 }
-
-const buildEmptyDecodedBlob = (
-  index: number,
-  bitmap: DecodedBitmap,
-  compression: Compression,
-  type: number | null,
-  faceDataIdx: number | null,
-): DecodedBlob => ({
-  index,
-  faceDataIdx,
-  type,
-  typeName: type !== null ? typeName(type) : 'UNKNOWN',
-  width: bitmap.width,
-  height: bitmap.height,
-  compression,
-  rawSize: bitmap.width * bitmap.height * 2,
-  rgba: bitmap.rgba,
-  raw: new Uint8Array(0),
-})
 
 const requireMatch = (
   existing: { width: number; height: number },
@@ -872,47 +1109,29 @@ const requireMatch = (
   }
 }
 
-/** Replace the pixel data at an AssetRef with a new BMP. Resizes the slot to
- *  the new bitmap's dimensions when the slot was previously empty (w=h=0);
- *  otherwise (with `requireDimMatch: true`) enforces an exact match. */
 export const replaceAsset = (
   project: EditorProject,
   ref: AssetRef,
   bitmap: DecodedBitmap,
   opts: ReplaceOpts = { requireDimMatch: true },
 ): EditorProject => {
-  if (project.format === 'typeC' && ref.tag === 'typeC-blob') {
-    const existing = project.blobs[ref.blobIdx]
-    if (existing && opts.requireDimMatch) {
-      requireMatch(
-        {
-          width: existing.width ?? 0,
-          height: existing.height ?? 0,
-        },
-        bitmap,
-        `blob ${ref.blobIdx}`,
-      )
+  if (project.format === 'typeC' && ref.tag === 'typeC-slot') {
+    const set = project.assetSets.find((s) => s.id === ref.setId)
+    if (!set) return project
+    // Type C requires uniform dims across a set; if any slot is non-empty,
+    // the new BMP must match.
+    if (opts.requireDimMatch && set.width > 0 && set.height > 0) {
+      requireMatch({ width: set.width, height: set.height }, bitmap, `slot ${ref.slotIdx}`)
     }
-    const next = buildEmptyDecodedBlob(
-      ref.blobIdx,
-      bitmap,
-      existing?.compression ?? 'RLE_LINE',
-      existing?.type ?? null,
-      existing?.faceDataIdx ?? null,
+    const slots = set.slots.map((s, i) =>
+      i === ref.slotIdx ? { rgba: bitmap.rgba } : s,
     )
-    const blobs = project.blobs.slice()
-    blobs[ref.blobIdx] = next
-    // Also patch the matching faceData width/height if the slot was empty.
-    let header = project.header
-    if (existing?.faceDataIdx != null) {
-      const faceData = header.faceData.map((fd, i) =>
-        i === existing.faceDataIdx && (fd.w === 0 || fd.h === 0)
-          ? { ...fd, w: bitmap.width, h: bitmap.height }
-          : fd,
-      )
-      header = { ...header, faceData }
-    }
-    return { ...project, header, blobs }
+    const assetSets = project.assetSets.map((s) =>
+      s.id === ref.setId
+        ? { ...s, width: bitmap.width, height: bitmap.height, slots }
+        : s,
+    )
+    return { ...project, assetSets }
   }
 
   if (project.format === 'faceN') {
@@ -955,7 +1174,6 @@ export const replaceAsset = (
       return { ...project, face: { ...project.face, elements } }
     }
   }
-
   return project
 }
 
@@ -978,14 +1196,10 @@ const patchElementAsset = (
 ): FNEl => {
   switch (el.kind) {
     case 'Image':
-      return slotIdx === 0
-        ? { ...el, img: swapImgRef(el.img, bmp, opts, 'image') }
-        : el
+      return slotIdx === 0 ? { ...el, img: swapImgRef(el.img, bmp, opts, 'image') } : el
     case 'DayName': {
       const imgs = el.imgs.map((img, i) =>
-        i === slotIdx
-          ? swapImgRef(img, bmp, opts, `${dayNameLabels[i] ?? i}`)
-          : img,
+        i === slotIdx ? swapImgRef(img, bmp, opts, dayNameLabels[i] ?? `${i}`) : img,
       )
       return { ...el, imgs }
     }
@@ -997,9 +1211,7 @@ const patchElementAsset = (
       return el
     }
     case 'TimeHand':
-      return slotIdx === 0
-        ? { ...el, img: swapImgRef(el.img, bmp, opts, 'hand') }
-        : el
+      return slotIdx === 0 ? { ...el, img: swapImgRef(el.img, bmp, opts, 'hand') } : el
     case 'BarDisplay':
     case 'Weather': {
       const imgs = el.imgs.map((img, i) =>
@@ -1008,9 +1220,7 @@ const patchElementAsset = (
       return { ...el, imgs }
     }
     case 'Dash':
-      return slotIdx === 0
-        ? { ...el, img: swapImgRef(el.img, bmp, opts, 'dash') }
-        : el
+      return slotIdx === 0 ? { ...el, img: swapImgRef(el.img, bmp, opts, 'dash') } : el
     case 'TimeNum':
     case 'HeartRateNum':
     case 'StepsNum':
@@ -1023,11 +1233,8 @@ const patchElementAsset = (
   }
 }
 
-// ---------- insert (simple kinds only — Phase 2) ----------
+// ---------- insert (single-blob + multi-blob, Type C) ----------
 
-/** Type C kinds we can insert in Phase 2. All consume exactly 1 blob, so the
- *  user picks a single BMP and we wire it up. Digit-set kinds (10 blobs each)
- *  are deferred to Phase 3's font generator. */
 export const TYPEC_INSERTABLE: { type: number; name: string }[] = [
   { type: 0x01, name: 'BACKGROUND' },
   { type: 0x45, name: 'TIME_AM' },
@@ -1050,52 +1257,291 @@ export const TYPEC_INSERTABLE: { type: number; name: string }[] = [
   { type: 0xf5, name: 'HAND_PIN_LOWER' },
 ]
 
-/** Insert a 1-blob Type C layer at the end of faceData, appending the bitmap
- *  to the blob array. */
-export const insertTypeCLayer = (
-  project: TypeCProject,
+const DIGITS = ['0','1','2','3','4','5','6','7','8','9'] as const
+const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] as const
+const MONTHS = [
+  'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec',
+] as const
+
+export const TYPEC_FONT_INSERTABLE: {
+  type: number
+  name: string
+  count: number
+  glyphs: readonly string[]
+}[] = [
+  { type: 0x40, name: 'TIME_H1', count: 10, glyphs: DIGITS },
+  { type: 0x41, name: 'TIME_H2', count: 10, glyphs: DIGITS },
+  { type: 0x43, name: 'TIME_M1', count: 10, glyphs: DIGITS },
+  { type: 0x44, name: 'TIME_M2', count: 10, glyphs: DIGITS },
+  { type: 0x45, name: 'TIME_AM', count: 1, glyphs: ['AM'] },
+  { type: 0x46, name: 'TIME_PM', count: 1, glyphs: ['PM'] },
+  { type: 0x30, name: 'DAY_NUM', count: 10, glyphs: DIGITS },
+  { type: 0x11, name: 'MONTH_NUM', count: 10, glyphs: DIGITS },
+  { type: 0x12, name: 'YEAR', count: 10, glyphs: DIGITS },
+  { type: 0x72, name: 'STEPS_B', count: 10, glyphs: DIGITS },
+  { type: 0x73, name: 'STEPS_B_CA', count: 10, glyphs: DIGITS },
+  { type: 0x74, name: 'STEPS_B_RA', count: 10, glyphs: DIGITS },
+  { type: 0x82, name: 'HR_B', count: 10, glyphs: DIGITS },
+  { type: 0x83, name: 'HR_B_CA', count: 10, glyphs: DIGITS },
+  { type: 0x84, name: 'HR_B_RA', count: 10, glyphs: DIGITS },
+  { type: 0x92, name: 'KCAL_B', count: 10, glyphs: DIGITS },
+  { type: 0x93, name: 'KCAL_B_CA', count: 10, glyphs: DIGITS },
+  { type: 0x94, name: 'KCAL_B_RA', count: 10, glyphs: DIGITS },
+  { type: 0xd2, name: 'BATT', count: 10, glyphs: DIGITS },
+  { type: 0xd3, name: 'BATT_CA', count: 10, glyphs: DIGITS },
+  { type: 0xd4, name: 'BATT_RA', count: 10, glyphs: DIGITS },
+  { type: 0x60, name: 'DAY_NAME', count: 7, glyphs: DAYS },
+  { type: 0x10, name: 'MONTH_NAME', count: 12, glyphs: MONTHS },
+]
+
+export const glyphsForTypeCType = (type: number): readonly string[] | null => {
+  return TYPEC_FONT_INSERTABLE.find((k) => k.type === type)?.glyphs ?? null
+}
+
+const DEFAULT_GLYPH_CELL: Record<number, { w: number; h: number }> = {
+  0x40: { w: 24, h: 36 }, 0x41: { w: 24, h: 36 }, 0x43: { w: 24, h: 36 }, 0x44: { w: 24, h: 36 },
+  0x30: { w: 16, h: 24 }, 0x11: { w: 16, h: 24 }, 0x12: { w: 16, h: 24 },
+  0x72: { w: 12, h: 16 }, 0x73: { w: 12, h: 16 }, 0x74: { w: 12, h: 16 },
+  0x82: { w: 12, h: 16 }, 0x83: { w: 12, h: 16 }, 0x84: { w: 12, h: 16 },
+  0x92: { w: 12, h: 16 }, 0x93: { w: 12, h: 16 }, 0x94: { w: 12, h: 16 },
+  0xd2: { w: 12, h: 16 }, 0xd3: { w: 12, h: 16 }, 0xd4: { w: 12, h: 16 },
+  0x45: { w: 24, h: 12 }, 0x46: { w: 24, h: 12 },
+  0x60: { w: 28, h: 14 }, 0x10: { w: 28, h: 14 },
+}
+
+const placeholderSlot = (): AssetSlot => ({ rgba: null })
+
+/** Create a new AssetSet sized for the given type. All slots start empty. */
+const createAssetSetForType = (
   type: number,
-  bitmap: DecodedBitmap,
-  position: { x: number; y: number } = { x: 0, y: 0 },
-): TypeCProject => {
-  const newBlobIdx = project.header.blobCount
-  const newFaceDataIdx = project.header.dataCount
-  if (newFaceDataIdx >= 39) {
-    throw new Error('Type C supports at most 39 faceData entries.')
-  }
-
-  const newBlob = buildEmptyDecodedBlob(
-    newBlobIdx,
-    bitmap,
-    'RLE_LINE',
-    type,
-    newFaceDataIdx,
-  )
-  const blobs = [...project.blobs, newBlob]
-
-  const faceData = project.header.faceData.slice()
-  faceData[newFaceDataIdx] = {
-    type,
-    idx: newBlobIdx,
-    x: position.x,
-    y: position.y,
-    w: bitmap.width,
-    h: bitmap.height,
-  }
+  size?: { w: number; h: number },
+): AssetSet => {
+  const count = blobCountForType(type, 0)
+  const cell = size ?? DEFAULT_GLYPH_CELL[type] ?? { w: 0, h: 0 }
   return {
-    ...project,
-    header: {
-      ...project.header,
-      dataCount: project.header.dataCount + 1,
-      blobCount: project.header.blobCount + 1,
-      faceData,
-    },
-    blobs,
+    id: nextId('asset'),
+    name: defaultSetName(type),
+    width: cell.w,
+    height: cell.h,
+    count,
+    kind: kindForType(type),
+    slots: Array.from({ length: count }, placeholderSlot),
   }
 }
 
-/** FaceN kinds we can insert in Phase 2. Each maps to a builder that takes the
- *  user-provided BMPs and produces a fresh FNEl. */
+/** Insert a Type C layer. If `assetSetId` is supplied, the new layer shares
+ *  that existing set; otherwise a fresh set is created (and seeded from
+ *  `bitmaps` if provided). */
+export const insertTypeCLayer = (
+  project: TypeCProject,
+  type: number,
+  options: {
+    assetSetId?: string
+    bitmaps?: DecodedBitmap[]
+    position?: { x: number; y: number }
+    name?: string
+  } = {},
+): TypeCProject => {
+  const { assetSetId, bitmaps, position = { x: 120, y: 120 }, name } = options
+
+  let setId: string
+  let assetSets = project.assetSets
+
+  if (assetSetId) {
+    const existing = project.assetSets.find((s) => s.id === assetSetId)
+    if (!existing) {
+      throw new Error(`Asset set ${assetSetId} doesn't exist.`)
+    }
+    const expectedCount = blobCountForType(type, project.animationFrames)
+    if (existing.count !== expectedCount) {
+      throw new Error(
+        `Type 0x${type.toString(16)} expects ${expectedCount} slots but set has ${existing.count}.`,
+      )
+    }
+    setId = existing.id
+  } else {
+    let newSet = createAssetSetForType(type)
+    if (name) newSet = { ...newSet, name }
+    if (bitmaps && bitmaps.length > 0) {
+      const expectedCount = blobCountForType(type, project.animationFrames)
+      if (bitmaps.length !== expectedCount) {
+        throw new Error(
+          `Type 0x${type.toString(16)} expects ${expectedCount} bitmap(s); got ${bitmaps.length}.`,
+        )
+      }
+      newSet = {
+        ...newSet,
+        width: bitmaps[0].width,
+        height: bitmaps[0].height,
+        slots: bitmaps.map((b) => ({ rgba: b.rgba })),
+      }
+    }
+    assetSets = [...assetSets, newSet]
+    setId = newSet.id
+  }
+
+  const layer: TypeCLayer = {
+    id: nextId('layer'),
+    type,
+    x: position.x,
+    y: position.y,
+    assetSetId: setId,
+  }
+  return { ...project, layers: [...project.layers, layer], assetSets }
+}
+
+// ---------- AssetSet helpers ----------
+
+/** All layers that consume a given set. */
+export const consumersOf = (
+  project: TypeCProject,
+  setId: string,
+): TypeCLayer[] => project.layers.filter((l) => l.assetSetId === setId)
+
+/** Existing sets that are dimension-compatible with the given type (same
+ *  count). Used to populate "Share with…" pickers. */
+export const compatibleSetsForType = (
+  project: TypeCProject,
+  type: number,
+): AssetSet[] => {
+  const count = blobCountForType(type, project.animationFrames)
+  return project.assetSets.filter((s) => s.count === count)
+}
+
+/** Create a standalone AssetSet — no layer references it yet. The caller is
+ *  expected to either rebind a layer to the new set or insert a layer
+ *  pointing at it. Used by the AssetLibrary "+ New" flow so users can build
+ *  a reusable asset before placing it on the canvas. */
+export const createTypeCAssetSet = (
+  project: TypeCProject,
+  type: number,
+  options: { bitmaps?: DecodedBitmap[]; name?: string } = {},
+): { project: TypeCProject; setId: string } => {
+  let newSet = createAssetSetForType(type)
+  if (options.name) newSet = { ...newSet, name: options.name }
+  if (options.bitmaps && options.bitmaps.length > 0) {
+    const expected = blobCountForType(type, project.animationFrames)
+    if (options.bitmaps.length !== expected) {
+      throw new Error(
+        `Type 0x${type.toString(16)} expects ${expected} bitmap(s); got ${options.bitmaps.length}.`,
+      )
+    }
+    newSet = {
+      ...newSet,
+      width: options.bitmaps[0].width,
+      height: options.bitmaps[0].height,
+      slots: options.bitmaps.map((b) => ({ rgba: b.rgba })),
+    }
+  }
+  return {
+    project: { ...project, assetSets: [...project.assetSets, newSet] },
+    setId: newSet.id,
+  }
+}
+
+/** Replace the slots of an AssetSet. Counts must match. */
+export const regenerateAssetSet = (
+  project: TypeCProject,
+  setId: string,
+  bitmaps: DecodedBitmap[],
+): TypeCProject => {
+  const set = project.assetSets.find((s) => s.id === setId)
+  if (!set) throw new Error(`Asset set ${setId} doesn't exist.`)
+  if (bitmaps.length !== set.count) {
+    throw new Error(
+      `Set "${set.name}" expects ${set.count} bitmap(s); got ${bitmaps.length}.`,
+    )
+  }
+  const next: AssetSet = {
+    ...set,
+    width: bitmaps[0].width,
+    height: bitmaps[0].height,
+    slots: bitmaps.map((b) => ({ rgba: b.rgba })),
+  }
+  return {
+    ...project,
+    assetSets: project.assetSets.map((s) => (s.id === setId ? next : s)),
+  }
+}
+
+export const renameAssetSet = (
+  project: TypeCProject,
+  setId: string,
+  name: string,
+): TypeCProject => ({
+  ...project,
+  assetSets: project.assetSets.map((s) => (s.id === setId ? { ...s, name } : s)),
+})
+
+/** Delete a set. Refuses if any layer still consumes it — caller must unlink
+ *  consumers first. */
+export const deleteAssetSet = (
+  project: TypeCProject,
+  setId: string,
+): TypeCProject => {
+  const cs = consumersOf(project, setId)
+  if (cs.length > 0) {
+    throw new Error(
+      `Set is still used by ${cs.length} layer(s); remove or rebind them first.`,
+    )
+  }
+  return {
+    ...project,
+    assetSets: project.assetSets.filter((s) => s.id !== setId),
+  }
+}
+
+/** Detach a layer from a shared set — clones the set so the layer has its own
+ *  exclusive copy. No-op if the set already has only this consumer. */
+export const detachLayerFromSharedSet = (
+  project: TypeCProject,
+  layerIdx: number,
+): TypeCProject => {
+  const layer = project.layers[layerIdx]
+  if (!layer) return project
+  const cs = consumersOf(project, layer.assetSetId)
+  if (cs.length <= 1) return project
+  const source = project.assetSets.find((s) => s.id === layer.assetSetId)
+  if (!source) return project
+  const clone: AssetSet = {
+    ...source,
+    id: nextId('asset'),
+    name: `${source.name} (copy)`,
+    slots: source.slots.map((s) => ({ rgba: s.rgba })),
+  }
+  const layers = project.layers.map((l, i) =>
+    i === layerIdx ? { ...l, assetSetId: clone.id } : l,
+  )
+  return { ...project, layers, assetSets: [...project.assetSets, clone] }
+}
+
+/** Rebind a layer to a different (compatible) set. Previous binding is left
+ *  in the library even if it becomes orphan — the user might want to bind
+ *  another layer to it later, or restore it via undo. Orphan sets are
+ *  excluded from the .bin at pack time (see `materializeTypeC`). */
+export const rebindLayer = (
+  project: TypeCProject,
+  layerIdx: number,
+  newSetId: string,
+): TypeCProject => {
+  const layer = project.layers[layerIdx]
+  if (!layer) return project
+  const target = project.assetSets.find((s) => s.id === newSetId)
+  if (!target) throw new Error(`Asset set ${newSetId} doesn't exist.`)
+  const expected = blobCountForType(layer.type, project.animationFrames)
+  if (target.count !== expected) {
+    throw new Error(
+      `Layer expects ${expected} slots; "${target.name}" has ${target.count}.`,
+    )
+  }
+  const layers = project.layers.map((l, i) =>
+    i === layerIdx ? { ...l, assetSetId: newSetId } : l,
+  )
+  return { ...project, layers }
+}
+
+// ---------- FaceN insert (unchanged) ----------
+
 export type FaceNInsertableKind =
   | 'Image'
   | 'TimeHand-Hour'
@@ -1107,7 +1553,19 @@ export type FaceNInsertableKind =
   | 'BarDisplay'
   | 'Weather'
 
-export const FACEN_INSERTABLE: { kind: FaceNInsertableKind; label: string; imageCount: number }[] = [
+export type FaceNDigitDependentKind =
+  | 'TimeNum'
+  | 'HeartRateNum'
+  | 'StepsNum'
+  | 'KCalNum'
+  | 'DayNum'
+  | 'MonthNum'
+
+export const FACEN_INSERTABLE: {
+  kind: FaceNInsertableKind
+  label: string
+  imageCount: number
+}[] = [
   { kind: 'Image', label: 'Image', imageCount: 1 },
   { kind: 'TimeHand-Hour', label: 'Time hand (hour)', imageCount: 1 },
   { kind: 'TimeHand-Minute', label: 'Time hand (minute)', imageCount: 1 },
@@ -1119,7 +1577,7 @@ export const FACEN_INSERTABLE: { kind: FaceNInsertableKind; label: string; image
   { kind: 'Weather', label: 'Weather', imageCount: 0 },
 ]
 
-const emptyImgRef = (bmp?: DecodedBitmap): FaceN['preview'] => ({
+const emptyFaceNImgRef = (bmp?: DecodedBitmap): FaceN['preview'] => ({
   offset: 0,
   width: bmp?.width ?? 0,
   height: bmp?.height ?? 0,
@@ -1127,9 +1585,6 @@ const emptyImgRef = (bmp?: DecodedBitmap): FaceN['preview'] => ({
   rgba: bmp?.rgba ?? null,
 })
 
-/** Insert a FaceN element at the end of `face.elements`. `bitmaps` provides one
- *  bitmap per asset slot; pass an empty array (or fewer than required) to add
- *  the element with blank slots that the user fills in via Replace. */
 export const insertFaceNLayer = (
   project: FaceNProject,
   kind: FaceNInsertableKind,
@@ -1140,94 +1595,180 @@ export const insertFaceNLayer = (
   let element: FNEl
   switch (kind) {
     case 'Image':
-      element = { kind: 'Image', eType: 0, x: position.x, y: position.y, img: emptyImgRef(at(0)) }
+      element = { kind: 'Image', eType: 0, x: position.x, y: position.y, img: emptyFaceNImgRef(at(0)) }
       break
     case 'TimeHand-Hour':
     case 'TimeHand-Minute':
     case 'TimeHand-Second': {
       const hType = kind === 'TimeHand-Hour' ? 0 : kind === 'TimeHand-Minute' ? 1 : 2
       element = {
-        kind: 'TimeHand',
-        eType: 10,
-        hType,
-        pivotX: 120,
-        pivotY: 120,
-        img: emptyImgRef(at(0)),
-        x: position.x,
-        y: position.y,
+        kind: 'TimeHand', eType: 10, hType,
+        pivotX: 120, pivotY: 120,
+        img: emptyFaceNImgRef(at(0)),
+        x: position.x, y: position.y,
       }
       break
     }
     case 'Dash':
-      element = { kind: 'Dash', eType: 35, img: emptyImgRef(at(0)) }
+      element = { kind: 'Dash', eType: 35, img: emptyFaceNImgRef(at(0)) }
       break
     case 'DayName':
       element = {
-        kind: 'DayName',
-        eType: 4,
-        nType: 0,
-        x: position.x,
-        y: position.y,
-        imgs: Array.from({ length: 7 }, (_, i) => emptyImgRef(at(i))),
+        kind: 'DayName', eType: 4, nType: 0,
+        x: position.x, y: position.y,
+        imgs: Array.from({ length: 7 }, (_, i) => emptyFaceNImgRef(at(i))),
       }
       break
     case 'BatteryFill':
       element = {
-        kind: 'BatteryFill',
-        eType: 5,
-        x: position.x,
-        y: position.y,
-        bgImg: emptyImgRef(at(0)),
-        x1: 0,
-        y1: 0,
-        x2: 0,
-        y2: 0,
-        unknown0: 0,
-        unknown1: 0,
-        img1: emptyImgRef(at(1)),
-        img2: emptyImgRef(at(2)),
+        kind: 'BatteryFill', eType: 5,
+        x: position.x, y: position.y,
+        bgImg: emptyFaceNImgRef(at(0)),
+        x1: 0, y1: 0, x2: 0, y2: 0,
+        unknown0: 0, unknown1: 0,
+        img1: emptyFaceNImgRef(at(1)),
+        img2: emptyFaceNImgRef(at(2)),
       }
       break
     case 'BarDisplay': {
       const count = Math.max(1, bitmaps.length || 5)
       element = {
-        kind: 'BarDisplay',
-        eType: 18,
-        bType: 0,
-        count,
-        x: position.x,
-        y: position.y,
-        imgs: Array.from({ length: count }, (_, i) => emptyImgRef(at(i))),
+        kind: 'BarDisplay', eType: 18, bType: 0, count,
+        x: position.x, y: position.y,
+        imgs: Array.from({ length: count }, (_, i) => emptyFaceNImgRef(at(i))),
       }
       break
     }
     case 'Weather': {
       const count = Math.max(1, bitmaps.length || 10)
       element = {
-        kind: 'Weather',
-        eType: 27,
-        count,
-        x: position.x,
-        y: position.y,
-        imgs: Array.from({ length: count }, (_, i) => emptyImgRef(at(i))),
+        kind: 'Weather', eType: 27, count,
+        x: position.x, y: position.y,
+        imgs: Array.from({ length: count }, (_, i) => emptyFaceNImgRef(at(i))),
       }
       break
     }
   }
+  return { ...project, face: { ...project.face, elements: [...project.face.elements, element] } }
+}
+
+// ---------- FaceN digit set helpers ----------
+
+export const insertFaceNDigitSet = (
+  project: FaceNProject,
+  digits: DecodedBitmap[],
+): { project: FaceNProject; setIdx: number } => {
+  if (digits.length !== 10) {
+    throw new Error(`Digit set needs exactly 10 bitmaps; got ${digits.length}.`)
+  }
+  const setIdx = project.face.digitSets.length
+  const newSet = {
+    digitSet: setIdx,
+    unknown: 0,
+    digits: digits.map((d) => ({
+      offset: 0,
+      width: d.width,
+      height: d.height,
+      rawSize: d.width * d.height * 3,
+      rgba: d.rgba,
+    })),
+  }
   return {
-    ...project,
-    face: {
-      ...project.face,
-      elements: [...project.face.elements, element],
-    },
+    project: { ...project, face: { ...project.face, digitSets: [...project.face.digitSets, newSet] } },
+    setIdx,
   }
 }
 
-// ---------- generic patch (kind-specific scalar fields) ----------
+export const insertFaceNDigitElement = (
+  project: FaceNProject,
+  kind: FaceNDigitDependentKind,
+  digitSetIdx: number,
+  position: { x: number; y: number },
+  align: 'L' | 'R' | 'C' = 'C',
+): FaceNProject => {
+  const set = project.face.digitSets[digitSetIdx]
+  if (!set) throw new Error(`Digit set ${digitSetIdx} doesn't exist.`)
+  const digitW = set.digits[0]?.width ?? 16
+  let element: FNEl
+  switch (kind) {
+    case 'TimeNum': {
+      const gap = Math.max(2, Math.floor(digitW * 0.3))
+      const xys = [
+        { x: position.x, y: position.y },
+        { x: position.x + digitW + gap, y: position.y },
+        { x: position.x + 2 * digitW + 2 * gap + digitW, y: position.y },
+        { x: position.x + 3 * digitW + 3 * gap + digitW, y: position.y },
+      ] as [
+        { x: number; y: number },
+        { x: number; y: number },
+        { x: number; y: number },
+        { x: number; y: number },
+      ]
+      element = {
+        kind: 'TimeNum', eType: 2,
+        digitSets: [digitSetIdx, digitSetIdx, digitSetIdx, digitSetIdx],
+        xys,
+        padding: new Uint8Array(12),
+      }
+      break
+    }
+    case 'HeartRateNum':
+      element = { kind: 'HeartRateNum', eType: 6, digitSet: digitSetIdx, align, x: position.x, y: position.y }
+      break
+    case 'StepsNum':
+      element = { kind: 'StepsNum', eType: 7, digitSet: digitSetIdx, align, x: position.x, y: position.y }
+      break
+    case 'KCalNum':
+      element = { kind: 'KCalNum', eType: 9, digitSet: digitSetIdx, align, x: position.x, y: position.y }
+      break
+    case 'DayNum':
+      element = {
+        kind: 'DayNum', eType: 13, digitSet: digitSetIdx, align,
+        xys: [
+          { x: position.x, y: position.y },
+          { x: position.x + digitW + 2, y: position.y },
+        ],
+      }
+      break
+    case 'MonthNum':
+      element = {
+        kind: 'MonthNum', eType: 15, digitSet: digitSetIdx, align,
+        xys: [
+          { x: position.x, y: position.y },
+          { x: position.x + digitW + 2, y: position.y },
+        ],
+      }
+      break
+  }
+  return { ...project, face: { ...project.face, elements: [...project.face.elements, element] } }
+}
 
-/** Patch arbitrary scalar fields on the selected FaceN element. The patcher
- *  has to know which fields are valid for each kind; callers should pass only
- *  fields that exist on the discriminated subtype. */
+export const regenerateFaceNDigitSet = (
+  project: FaceNProject,
+  setIdx: number,
+  digits: DecodedBitmap[],
+): FaceNProject => {
+  if (digits.length !== 10) {
+    throw new Error(`Digit set needs exactly 10 bitmaps; got ${digits.length}.`)
+  }
+  const set = project.face.digitSets[setIdx]
+  if (!set) throw new Error(`Digit set ${setIdx} doesn't exist.`)
+  const newSet = {
+    ...set,
+    digits: digits.map((d) => ({
+      offset: 0,
+      width: d.width,
+      height: d.height,
+      rawSize: d.width * d.height * 3,
+      rgba: d.rgba,
+    })),
+  }
+  const digitSets = project.face.digitSets.map((s, i) => (i === setIdx ? newSet : s))
+  return { ...project, face: { ...project.face, digitSets } }
+}
+
+// ---------- FaceN element patcher (kind-specific scalar fields) ----------
+
 export const patchFaceNElement = (
   project: FaceNProject,
   idx: number,
@@ -1240,19 +1781,17 @@ export const patchFaceNElement = (
   return { ...project, face: { ...project.face, elements } }
 }
 
-/** Patch arbitrary fields on a Type C faceData entry. */
-export const patchTypeCFaceData = (
+/** Patch arbitrary x/y on the Type C layer. */
+export const patchTypeCLayer = (
   project: TypeCProject,
   idx: number,
-  patch: Partial<FaceDataEntry>,
-): TypeCProject => {
-  const faceData = project.header.faceData.map((fd, i) =>
-    i === idx ? { ...fd, ...patch } : fd,
-  )
-  return { ...project, header: { ...project.header, faceData } }
-}
+  patch: Partial<TypeCLayer>,
+): TypeCProject => ({
+  ...project,
+  layers: project.layers.map((l, i) => (i === idx ? { ...l, ...patch } : l)),
+})
 
-// ---------- digit-set inspection (read-only for Phase 2) ----------
+// ---------- digit-set inspection (FaceN) ----------
 
 export type DigitSetView = {
   setIdx: number
@@ -1273,54 +1812,27 @@ export const listDigitSets = (project: EditorProject): DigitSetView[] => {
   }))
 }
 
-/** Suppress the "unused" warning on `swapImgRef` (TS6 lint catches the
- *  intermediate helper). It's exported indirectly via patchElementAsset. */
 void swapImgRef
 
 // ===================================================================
-// Phase 2 polish: renderer-accurate bbox for the selection overlay
+// Renderer-accurate bbox for the selection overlay
 // ===================================================================
 
-/** Matches DIGIT_SPACING in renderFace.ts — kept in sync so the selection
- *  overlay aligns exactly with what `drawDigits` paints. */
 const DIGIT_SPACING = 2
 
 type Align = 'L' | 'C' | 'R'
 
 const typeCAlignFor = (type: number): Align | null => {
-  // L-aligned digit kinds: padded 2-digit date fields + the base (no-suffix)
-  // multi-digit metric variants.
   switch (type) {
-    case 0x11: // MONTH_NUM
-    case 0x6b: // MONTH_NUM_B
-    case 0x30: // DAY_NUM
-    case 0x6c: // DAY_NUM_B
-    case 0x12: // YEAR
-    case 0x62: // STEPS
-    case 0x72: // STEPS_B
-    case 0x76: // STEPS_GOAL
-    case 0x65: // HR
-    case 0x82: // HR_B
-    case 0x68: // KCAL
-    case 0x92: // KCAL_B
-    case 0xa2: // DIST
-    case 0xd2: // BATT
+    case 0x11: case 0x6b: case 0x30: case 0x6c: case 0x12:
+    case 0x62: case 0x72: case 0x76: case 0x65: case 0x82:
+    case 0x68: case 0x92: case 0xa2: case 0xd2:
       return 'L'
-    case 0x63: // STEPS_CA
-    case 0x73: // STEPS_B_CA
-    case 0x66: // HR_CA
-    case 0x83: // HR_B_CA
-    case 0x93: // KCAL_B_CA
-    case 0xa3: // DIST_CA
-    case 0xd3: // BATT_CA
+    case 0x63: case 0x73: case 0x66: case 0x83:
+    case 0x93: case 0xa3: case 0xd3:
       return 'C'
-    case 0x64: // STEPS_RA
-    case 0x74: // STEPS_B_RA
-    case 0x67: // HR_RA
-    case 0x84: // HR_B_RA
-    case 0x94: // KCAL_B_RA
-    case 0xa4: // DIST_RA
-    case 0xd4: // BATT_RA
+    case 0x64: case 0x74: case 0x67: case 0x84:
+    case 0x94: case 0xa4: case 0xd4:
       return 'R'
   }
   return null
@@ -1331,100 +1843,68 @@ const typeCValueFor = (
   dummy: DummyState,
 ): { value: number; padTo: number } | null => {
   switch (type) {
-    case 0x11:
-    case 0x6b:
-      return { value: dummy.month, padTo: 2 }
-    case 0x30:
-    case 0x6c:
-      return { value: dummy.day, padTo: 2 }
-    case 0x12:
-      return { value: dummy.year % 100, padTo: 2 }
-    case 0x62:
-    case 0x63:
-    case 0x64:
-    case 0x72:
-    case 0x73:
-    case 0x74:
+    case 0x11: case 0x6b: return { value: dummy.month, padTo: 2 }
+    case 0x30: case 0x6c: return { value: dummy.day, padTo: 2 }
+    case 0x12: return { value: dummy.year % 100, padTo: 2 }
+    case 0x62: case 0x63: case 0x64:
+    case 0x72: case 0x73: case 0x74:
       return { value: dummy.steps, padTo: 1 }
-    case 0x76:
-      return { value: 10000, padTo: 1 }
-    case 0x65:
-    case 0x66:
-    case 0x67:
-    case 0x82:
-    case 0x83:
-    case 0x84:
+    case 0x76: return { value: 10000, padTo: 1 }
+    case 0x65: case 0x66: case 0x67:
+    case 0x82: case 0x83: case 0x84:
       return { value: dummy.hr, padTo: 1 }
-    case 0x68:
-    case 0x92:
-    case 0x93:
-    case 0x94:
+    case 0x68: case 0x92: case 0x93: case 0x94:
       return { value: dummy.kcal, padTo: 1 }
-    case 0xa2:
-    case 0xa3:
-    case 0xa4:
+    case 0xa2: case 0xa3: case 0xa4:
       return { value: dummy.distance, padTo: 1 }
-    case 0xd2:
-    case 0xd3:
-    case 0xd4:
+    case 0xd2: case 0xd3: case 0xd4:
       return { value: dummy.battery, padTo: 1 }
   }
   return null
 }
 
 const typeCDigitsBbox = (
-  fd: FaceDataEntry,
+  layer: TypeCLayer,
+  set: AssetSet,
   dummy: DummyState,
 ): { x: number; y: number; w: number; h: number } | null => {
-  const align = typeCAlignFor(fd.type)
-  const info = typeCValueFor(fd.type, dummy)
+  const align = typeCAlignFor(layer.type)
+  const info = typeCValueFor(layer.type, dummy)
   if (!align || !info) return null
   const s = String(Math.max(0, Math.floor(info.value))).padStart(info.padTo, '0')
-  const totalW = s.length * fd.w + (s.length - 1) * DIGIT_SPACING
+  const totalW = s.length * set.width + (s.length - 1) * DIGIT_SPACING
   let startX: number
   switch (align) {
-    case 'L':
-      startX = fd.x
-      break
-    case 'R':
-      startX = fd.x - totalW
-      break
-    case 'C':
-      startX = fd.x - Math.floor(totalW / 2)
-      break
+    case 'L': startX = layer.x; break
+    case 'R': startX = layer.x - totalW; break
+    case 'C': startX = layer.x - Math.floor(totalW / 2); break
   }
-  return { x: startX, y: fd.y, w: totalW, h: fd.h }
+  return { x: startX, y: layer.y, w: totalW, h: set.height }
 }
 
-/** Renderer-accurate bounding box for the selection overlay. For single-blob
- *  layers it matches the stored (fd.x, fd.y, fd.w, fd.h). For multi-digit
- *  kinds it mirrors `drawDigits` — total width across all digits + spacing,
- *  shifted left for centered/right-aligned variants. Returns null when the
- *  layer has no meaningful single bbox (e.g., background strips, unknown). */
 export const computeLayerBbox = (
   project: EditorProject,
   layerIdx: number,
   dummy: DummyStateN,
 ): { x: number; y: number; w: number; h: number } | null => {
   if (project.format === 'typeC') {
-    const fd = project.header.faceData[layerIdx]
-    if (!fd) return null
-    const digits = typeCDigitsBbox(fd, dummy)
+    const layer = project.layers[layerIdx]
+    if (!layer) return null
+    const set = project.assetSets.find((s) => s.id === layer.assetSetId)
+    if (!set) return null
+    const digits = typeCDigitsBbox(layer, set, dummy)
     if (digits) return digits
-    if (fd.w > 0 && fd.h > 0) {
-      return { x: fd.x, y: fd.y, w: fd.w, h: fd.h }
+    if (set.width > 0 && set.height > 0) {
+      return { x: layer.x, y: layer.y, w: set.width, h: set.height }
     }
     return null
   }
-
   const el = project.face.elements[layerIdx]
   if (!el) return null
   switch (el.kind) {
     case 'Image':
       return { x: el.x, y: el.y, w: el.img.width, h: el.img.height }
     case 'DayName': {
-      // FaceN renders the active weekday's image at (x,y). dummy.dow is the
-      // index; fall back to the widest image so the overlay still looks right.
       const img = el.imgs[dummy.dow] ?? el.imgs[0]
       if (!img) return null
       return { x: el.x, y: el.y, w: img.width, h: img.height }
@@ -1434,11 +1914,7 @@ export const computeLayerBbox = (
     case 'TimeHand':
       return { x: el.x, y: el.y, w: el.img.width, h: el.img.height }
     case 'Dash':
-      // Dash has no position field — overlay rooted at (0,0) is the best we
-      // can offer until the format documents one.
-      return el.img.width > 0
-        ? { x: 0, y: 0, w: el.img.width, h: el.img.height }
-        : null
+      return el.img.width > 0 ? { x: 0, y: 0, w: el.img.width, h: el.img.height } : null
     case 'BarDisplay':
     case 'Weather': {
       const img = el.imgs[0]
@@ -1453,8 +1929,7 @@ export const computeLayerBbox = (
     case 'TimeNum':
     case 'Unknown29':
     case 'Unknown':
-      // These reference a shared digit set and don't carry a single bbox; the
-      // overlay is hidden for them in Phase 2.
       return null
   }
 }
+

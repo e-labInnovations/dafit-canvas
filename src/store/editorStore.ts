@@ -2,20 +2,29 @@ import { create } from 'zustand'
 import { defaultDummy } from '../lib/renderFace'
 import { defaultDummyN, type DummyStateN } from '../lib/renderFaceN'
 import {
+  createTypeCAssetSet,
+  deleteAssetSet,
   deleteLayer,
+  detachLayerFromSharedSet,
   emptyProject,
+  insertFaceNDigitElement,
+  insertFaceNDigitSet,
   insertFaceNLayer,
   insertTypeCLayer,
   patchFaceNElement,
-  patchTypeCFaceData,
+  patchTypeCLayer,
+  rebindLayer,
+  regenerateAssetSet,
+  regenerateFaceNDigitSet,
+  renameAssetSet,
   replaceAsset,
   reorderLayer,
   setLayerXY,
   type AssetRef,
+  type FaceNDigitDependentKind,
   type FaceNInsertableKind,
 } from '../lib/projectIO'
-import type { EditorProject, WatchFormat } from '../types/face'
-import type { FaceDataEntry } from '../lib/dawft'
+import type { EditorProject, TypeCLayer, WatchFormat } from '../types/face'
 import type { FaceN } from '../lib/faceN'
 
 type DecodedBitmap = { width: number; height: number; rgba: Uint8ClampedArray }
@@ -41,24 +50,77 @@ type EditorState = {
   reorderLayer: (idx: number, direction: 'up' | 'down') => void
   deleteLayer: (idx: number) => void
 
-  // asset / insert (Phase 2)
+  // asset slot replace (BMP-driven)
   replaceAssetAction: (
     ref: AssetRef,
     bitmap: DecodedBitmap,
     requireDimMatch?: boolean,
   ) => void
+
+  // Type C inserts
+  /** Single-blob kind insert with a user-picked BMP. */
   insertTypeC: (type: number, bitmap: DecodedBitmap) => void
+  /** Multi-blob kind insert with placeholder slots. Caller fills via
+   *  **Generate from font** in the property panel. */
+  insertTypeCEmpty: (type: number) => void
+  /** Insert a Type C layer that *shares* an existing AssetSet (no new blobs
+   *  allocated; the firmware reads the same range). */
+  insertTypeCShared: (
+    type: number,
+    assetSetId: string,
+    position?: { x: number; y: number },
+  ) => void
+
+  // Type C AssetSet operations
+  /** Add a standalone asset set to the library (no layer references it).
+   *  The caller can later bind a layer via the rebind picker. */
+  createAssetSetAction: (type: number, bitmaps?: DecodedBitmap[]) => void
+  renameAssetSetAction: (setId: string, name: string) => void
+  deleteAssetSetAction: (setId: string) => void
+  rebindLayerAction: (layerIdx: number, newSetId: string) => void
+  detachLayerAction: (layerIdx: number) => void
+  /** Regenerate the slots of a Type C asset set from a font. Affects every
+   *  layer that consumes the set. */
+  regenerateAssetSetFromFont: (
+    setId: string,
+    bitmaps: DecodedBitmap[],
+  ) => void
+
+  // FaceN inserts
   insertFaceN: (kind: FaceNInsertableKind, bitmaps: DecodedBitmap[]) => void
-  patchFaceData: (idx: number, patch: Partial<FaceDataEntry>) => void
+  insertFaceNDigitSetAction: (
+    digits: DecodedBitmap[],
+    chain?: {
+      kind: FaceNDigitDependentKind
+      position: { x: number; y: number }
+      align?: 'L' | 'R' | 'C'
+    },
+  ) => void
+  insertFaceNDigitElementAction: (
+    kind: FaceNDigitDependentKind,
+    digitSetIdx: number,
+    position: { x: number; y: number },
+    align?: 'L' | 'R' | 'C',
+  ) => void
+  regenerateFaceNDigitSetFromFont: (
+    setIdx: number,
+    digits: DecodedBitmap[],
+  ) => void
+
+  // Element / layer patches
+  patchLayer: (idx: number, patch: Partial<TypeCLayer>) => void
   patchElement: (idx: number, patch: Partial<FNEl>) => void
 
-  // dummy state
+  // Dummy state
   patchDummy: <K extends keyof DummyStateN>(key: K, value: DummyStateN[K]) => void
   resetDummy: () => void
 
-  // header / project-level mutations
+  // Project-level mutations
   setFaceNumber: (n: number) => void
 }
+
+const errMsg = (err: unknown): string =>
+  err instanceof Error ? err.message : String(err)
 
 export const useEditor = create<EditorState>((set) => ({
   project: null,
@@ -109,7 +171,7 @@ export const useEditor = create<EditorState>((set) => ({
         const next = replaceAsset(state.project, ref, bitmap, { requireDimMatch })
         return { project: next, error: null }
       } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) }
+        return { error: errMsg(err) }
       }
     }),
 
@@ -117,14 +179,108 @@ export const useEditor = create<EditorState>((set) => ({
     set((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
-        const next = insertTypeCLayer(state.project, type, bitmap)
+        const next = insertTypeCLayer(state.project, type, { bitmaps: [bitmap] })
         return {
           project: next,
-          selectedIdx: next.header.dataCount - 1,
+          selectedIdx: next.layers.length - 1,
           error: null,
         }
       } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) }
+        return { error: errMsg(err) }
+      }
+    }),
+
+  insertTypeCEmpty: (type) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      try {
+        const next = insertTypeCLayer(state.project, type)
+        return {
+          project: next,
+          selectedIdx: next.layers.length - 1,
+          error: null,
+        }
+      } catch (err) {
+        return { error: errMsg(err) }
+      }
+    }),
+
+  insertTypeCShared: (type, assetSetId, position) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      try {
+        const next = insertTypeCLayer(state.project, type, {
+          assetSetId,
+          position,
+        })
+        return {
+          project: next,
+          selectedIdx: next.layers.length - 1,
+          error: null,
+        }
+      } catch (err) {
+        return { error: errMsg(err) }
+      }
+    }),
+
+  createAssetSetAction: (type, bitmaps) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      try {
+        const { project: next } = createTypeCAssetSet(state.project, type, {
+          bitmaps,
+        })
+        return { project: next, error: null }
+      } catch (err) {
+        return { error: errMsg(err) }
+      }
+    }),
+
+  renameAssetSetAction: (setId, name) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      return { project: renameAssetSet(state.project, setId, name) }
+    }),
+
+  deleteAssetSetAction: (setId) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      try {
+        return { project: deleteAssetSet(state.project, setId), error: null }
+      } catch (err) {
+        return { error: errMsg(err) }
+      }
+    }),
+
+  rebindLayerAction: (layerIdx, newSetId) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      try {
+        return {
+          project: rebindLayer(state.project, layerIdx, newSetId),
+          error: null,
+        }
+      } catch (err) {
+        return { error: errMsg(err) }
+      }
+    }),
+
+  detachLayerAction: (layerIdx) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      return { project: detachLayerFromSharedSet(state.project, layerIdx) }
+    }),
+
+  regenerateAssetSetFromFont: (setId, bitmaps) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      try {
+        return {
+          project: regenerateAssetSet(state.project, setId, bitmaps),
+          error: null,
+        }
+      } catch (err) {
+        return { error: errMsg(err) }
       }
     }),
 
@@ -139,14 +295,74 @@ export const useEditor = create<EditorState>((set) => ({
           error: null,
         }
       } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) }
+        return { error: errMsg(err) }
       }
     }),
 
-  patchFaceData: (idx, patch) =>
+  insertFaceNDigitSetAction: (digits, chain) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'faceN') return state
+      try {
+        const { project: withSet, setIdx } = insertFaceNDigitSet(
+          state.project,
+          digits,
+        )
+        if (!chain) {
+          return { project: withSet, error: null }
+        }
+        const withElement = insertFaceNDigitElement(
+          withSet,
+          chain.kind,
+          setIdx,
+          chain.position,
+          chain.align ?? 'C',
+        )
+        return {
+          project: withElement,
+          selectedIdx: withElement.face.elements.length - 1,
+          error: null,
+        }
+      } catch (err) {
+        return { error: errMsg(err) }
+      }
+    }),
+
+  insertFaceNDigitElementAction: (kind, digitSetIdx, position, align) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'faceN') return state
+      try {
+        const next = insertFaceNDigitElement(
+          state.project,
+          kind,
+          digitSetIdx,
+          position,
+          align ?? 'C',
+        )
+        return {
+          project: next,
+          selectedIdx: next.face.elements.length - 1,
+          error: null,
+        }
+      } catch (err) {
+        return { error: errMsg(err) }
+      }
+    }),
+
+  regenerateFaceNDigitSetFromFont: (setIdx, digits) =>
+    set((state) => {
+      if (!state.project || state.project.format !== 'faceN') return state
+      try {
+        const next = regenerateFaceNDigitSet(state.project, setIdx, digits)
+        return { project: next, error: null }
+      } catch (err) {
+        return { error: errMsg(err) }
+      }
+    }),
+
+  patchLayer: (idx, patch) =>
     set((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
-      return { project: patchTypeCFaceData(state.project, idx, patch) }
+      return { project: patchTypeCLayer(state.project, idx, patch) }
     }),
 
   patchElement: (idx, patch) =>
@@ -163,11 +379,6 @@ export const useEditor = create<EditorState>((set) => ({
   setFaceNumber: (n) =>
     set((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
-      return {
-        project: {
-          ...state.project,
-          header: { ...state.project.header, faceNumber: n },
-        },
-      }
+      return { project: { ...state.project, faceNumber: n } }
     }),
 }))

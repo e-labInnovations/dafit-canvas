@@ -121,8 +121,8 @@ function AssetSection({ layerIdx }: { layerIdx: number }) {
 
 const assetRefKey = (ref: AssetRef): string => {
   switch (ref.tag) {
-    case 'typeC-blob':
-      return `tc-${ref.blobIdx}`
+    case 'typeC-slot':
+      return `tc-${ref.setId}-${ref.slotIdx}`
     case 'faceN-preview':
       return 'fn-preview'
     case 'faceN-digit':

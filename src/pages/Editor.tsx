@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState } from "react";
 import {
   AlertTriangle,
   Binary,
@@ -6,87 +6,89 @@ import {
   FilePlus2,
   FolderOpen,
   Package,
-} from 'lucide-react'
-import EditorCanvas from '../components/editor/EditorCanvas'
-import LayerList from '../components/editor/LayerList'
-import PropertyPanel from '../components/editor/PropertyPanel'
-import { useEditor } from '../store/editorStore'
+} from "lucide-react";
+import EditorCanvas from "../components/editor/EditorCanvas";
+import LayerList from "../components/editor/LayerList";
+import PropertyPanel from "../components/editor/PropertyPanel";
+import { useEditor } from "../store/editorStore";
 import {
   downloadBlob,
   exportBin,
   exportZip,
   importBin,
   importZip,
-} from '../lib/projectIO'
-import type { EditorProject, WatchFormat } from '../types/face'
+} from "../lib/projectIO";
+import type { EditorProject, WatchFormat } from "../types/face";
 
-const baseName = (project: ReturnType<typeof useEditor.getState>['project']): string => {
-  if (!project) return 'face'
+const baseName = (
+  project: ReturnType<typeof useEditor.getState>["project"],
+): string => {
+  if (!project) return "face";
   if (project.fileName) {
-    return project.fileName.replace(/\.(bin|zip)$/i, '') || 'face'
+    return project.fileName.replace(/\.(bin|zip)$/i, "") || "face";
   }
-  if (project.format === 'typeC') return `face-${project.header.faceNumber}`
-  return 'face'
-}
+  if (project.format === "typeC") return `face-${project.faceNumber}`;
+  return "face";
+};
 
 function Editor() {
-  const project = useEditor((s) => s.project)
-  const error = useEditor((s) => s.error)
-  const newProject = useEditor((s) => s.newProject)
-  const setProject = useEditor((s) => s.setProject)
-  const setError = useEditor((s) => s.setError)
+  const project = useEditor((s) => s.project);
+  const error = useEditor((s) => s.error);
+  const newProject = useEditor((s) => s.newProject);
+  const setProject = useEditor((s) => s.setProject);
+  const setError = useEditor((s) => s.setError);
 
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const [showNewMenu, setShowNewMenu] = useState(false)
-  const [importing, setImporting] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showNewMenu, setShowNewMenu] = useState(false);
+  const [importing, setImporting] = useState(false);
 
   const onNew = (format: WatchFormat) => {
-    setShowNewMenu(false)
-    newProject(format)
-  }
+    setShowNewMenu(false);
+    newProject(format);
+  };
 
-  const onImportClick = () => fileInputRef.current?.click()
+  const onImportClick = () => fileInputRef.current?.click();
 
   const onImportFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setImporting(true)
-    setError(null)
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setImporting(true);
+    setError(null);
     try {
-      const isBin = /\.bin$/i.test(file.name)
-      const isZip = /\.zip$/i.test(file.name)
-      let imported: EditorProject
-      if (isBin) imported = await importBin(file)
-      else if (isZip) imported = await importZip(file)
-      else throw new Error('Pick a .bin or .zip file.')
-      setProject(imported)
+      const isBin = /\.bin$/i.test(file.name);
+      const isZip = /\.zip$/i.test(file.name);
+      let imported: EditorProject;
+      if (isBin) imported = await importBin(file);
+      else if (isZip) imported = await importZip(file);
+      else throw new Error("Pick a .bin or .zip file.");
+      setProject(imported);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setImporting(false)
+      setImporting(false);
     }
-  }
+  };
 
   const onExportBin = () => {
-    if (!project) return
+    if (!project) return;
     try {
-      const bytes = exportBin(project)
-      downloadBlob(bytes, `${baseName(project)}.bin`)
+      const bytes = exportBin(project);
+      downloadBlob(bytes, `${baseName(project)}.bin`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err));
     }
-  }
+  };
 
   const onExportZip = async () => {
-    if (!project) return
+    if (!project) return;
     try {
-      const blob = await exportZip(project)
-      downloadBlob(blob, `${baseName(project)}.zip`)
+      const blob = await exportZip(project);
+      downloadBlob(blob, `${baseName(project)}.zip`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(err instanceof Error ? err.message : String(err));
     }
-  }
+  };
 
   return (
     <section className="editor">
@@ -96,9 +98,9 @@ function Editor() {
           {project && (
             <span className="editor-subtitle">
               <span className="format-badge">
-                {project.format === 'typeC' ? 'Type C' : 'FaceN'}
+                {project.format === "typeC" ? "Type C" : "FaceN"}
               </span>
-              {project.fileName ? ` · ${project.fileName}` : ' · untitled'}
+              {project.fileName ? ` · ${project.fileName}` : " · untitled"}
             </span>
           )}
         </div>
@@ -114,11 +116,11 @@ function Editor() {
             </button>
             {showNewMenu && (
               <div className="editor-new-menu" role="menu">
-                <button type="button" onClick={() => onNew('typeC')}>
-                  Type C (dawft)
+                <button type="button" onClick={() => onNew("typeC")}>
+                  Type C
                 </button>
-                <button type="button" onClick={() => onNew('faceN')}>
-                  FaceN (extrathundertool)
+                <button type="button" disabled onClick={() => onNew("faceN")}>
+                  FaceN (coming soon)
                 </button>
               </div>
             )}
@@ -130,7 +132,7 @@ function Editor() {
             disabled={importing}
           >
             <FolderOpen size={14} aria-hidden />
-            {importing ? 'Importing…' : 'Import'}
+            {importing ? "Importing…" : "Import"}
           </button>
           <button
             type="button"
@@ -188,7 +190,7 @@ function Editor() {
         </div>
       )}
     </section>
-  )
+  );
 }
 
-export default Editor
+export default Editor;

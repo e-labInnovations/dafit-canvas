@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import FacePreview from '../dump/FacePreview'
 import FacePreviewN from '../dump/FacePreviewN'
 import { useEditor } from '../../store/editorStore'
-import { computeLayerBbox } from '../../lib/projectIO'
+import { computeLayerBbox, materializeTypeC } from '../../lib/projectIO'
 
 // Native watch face is 240×240. We scale up to 2× by default (480px), but
 // shrink to fit when the column is narrower. MIN_SCALE = 1 means we never
@@ -64,12 +64,20 @@ function EditorCanvas() {
     >
       <div onClick={(e) => e.stopPropagation()}>
         {project.format === 'typeC' ? (
-          <FacePreview
-            header={project.header}
-            blobs={project.blobs}
-            dummy={dummy}
-            scale={scale}
-          />
+          (() => {
+            // Materialize layers+sets → (header, blobs) on every render. Cheap
+            // for typical face sizes (≤250 blobs) and keeps the renderer code
+            // path identical to the Dump/Pack pages.
+            const { header, blobs } = materializeTypeC(project)
+            return (
+              <FacePreview
+                header={header}
+                blobs={blobs}
+                dummy={dummy}
+                scale={scale}
+              />
+            )
+          })()
         ) : (
           <FacePreviewN face={project.face} dummy={dummy} scale={scale} />
         )}
