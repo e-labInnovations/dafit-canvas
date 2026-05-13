@@ -43,6 +43,11 @@ export type RasterizeOptions = {
   preserveAlpha?: boolean
   /** When `preserveAlpha === false`, this controls AA quality. Default true. */
   antialias?: boolean
+  /** Outline / stroke around the glyph. Width is in CSS pixels and a value
+   *  of 0 (or omitted) disables the stroke entirely. The stroke is drawn
+   *  *before* the fill so the fill sits inside the outline cleanly. */
+  strokeWidth?: number
+  strokeColor?: string
 }
 
 const rasterizeOne = (glyph: string, opts: RasterizeOptions): DecodedBitmap => {
@@ -60,6 +65,8 @@ const rasterizeOne = (glyph: string, opts: RasterizeOptions): DecodedBitmap => {
     paddingY = 1,
     preserveAlpha = false,
     antialias = true,
+    strokeWidth = 0,
+    strokeColor = '#000000',
   } = opts
 
   const canvas = document.createElement('canvas')
@@ -117,6 +124,16 @@ const rasterizeOne = (glyph: string, opts: RasterizeOptions): DecodedBitmap => {
       break
   }
 
+  // Stroke first so the fill sits *inside* the outline. Canvas's strokeText
+  // draws the stroke centred on the glyph contour, so half of it ends up
+  // outside the fill area — exactly what users expect from an outline.
+  if (strokeWidth > 0) {
+    ctx.strokeStyle = strokeColor
+    ctx.lineWidth = strokeWidth
+    ctx.lineJoin = 'round'
+    ctx.miterLimit = 2
+    ctx.strokeText(glyph, x, y)
+  }
   ctx.fillText(glyph, x, y)
 
   const imgData = ctx.getImageData(0, 0, width, height)

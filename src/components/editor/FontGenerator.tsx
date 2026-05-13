@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import { Type, Upload, X } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
 import {
-  COMMON_SYSTEM_FONTS,
   fontIsAvailable,
   loadFont,
   type LoadedFont,
@@ -13,6 +12,7 @@ import {
   type DecodedBitmap,
 } from '../../lib/glyphRasterizer'
 import type { FaceNDigitDependentKind } from '../../lib/projectIO'
+import FontFamilyPicker from './FontFamilyPicker'
 
 /** What the modal should produce + where to send the result. */
 export type FontTarget =
@@ -78,10 +78,34 @@ function FontGenerator({ target, onClose }: Props) {
 
   // Digit-set modes always render the 10 digits. Type C asset-set replace
   // uses whatever the target declares (digits, day names, AM/PM, etc.).
-  const glyphs =
-    target?.mode === 'replace-typeC-asset-set'
-      ? target.glyphs
-      : DEFAULT_TARGET_FACEN_GLYPHS
+  const presetGlyphs = useMemo<readonly string[]>(
+    () =>
+      target?.mode === 'replace-typeC-asset-set'
+        ? target.glyphs
+        : DEFAULT_TARGET_FACEN_GLYPHS,
+    [target],
+  )
+
+  // Editable glyph text — seeded from the preset, but user-editable for
+  // single-slot kinds (labels like "AM" / ":" / etc.). For multi-slot kinds
+  // (digits, day names, month names) the preset is canonical and we keep
+  // the inputs read-only so the user can't accidentally desync them from
+  // the firmware's blob-index expectations.
+  //
+  // Re-seed when the parent passes a different preset (component instance
+  // is reused across open/close cycles). Using the React-docs prop-sync
+  // pattern: two state slots + a self-state-update during render. React
+  // skips the in-progress render and re-renders with the synced state.
+  const [customGlyphs, setCustomGlyphs] = useState<string[]>(() => [
+    ...presetGlyphs,
+  ])
+  const [trackedPreset, setTrackedPreset] = useState(presetGlyphs)
+  if (trackedPreset !== presetGlyphs) {
+    setTrackedPreset(presetGlyphs)
+    setCustomGlyphs([...presetGlyphs])
+  }
+
+  const editableGlyphs = presetGlyphs.length === 1
 
   // ----- font picker state -----
   const [pick, setPick] = useState<FontPick>({
@@ -97,6 +121,8 @@ function FontGenerator({ target, onClose }: Props) {
   const [weight, setWeight] = useState(700)
   const [color, setColor] = useState('#ffffff')
   const [background, setBackground] = useState('#000000')
+  const [strokeWidth, setStrokeWidth] = useState(0)
+  const [strokeColor, setStrokeColor] = useState('#000000')
   const [width, setWidth] = useState(24)
   const [height, setHeight] = useState(36)
 
@@ -171,7 +197,7 @@ function FontGenerator({ target, onClose }: Props) {
   const bitmaps = useMemo<DecodedBitmap[]>(() => {
     if (!loaded || target === null) return []
     return rasterizeGlyphs({
-      glyphs: [...glyphs],
+      glyphs: [...customGlyphs],
       family: loaded.family,
       weight,
       size,
@@ -180,8 +206,23 @@ function FontGenerator({ target, onClose }: Props) {
       width,
       height,
       preserveAlpha,
+      strokeWidth,
+      strokeColor,
     })
-  }, [loaded, target, glyphs, weight, size, color, background, width, height, preserveAlpha])
+  }, [
+    loaded,
+    target,
+    customGlyphs,
+    weight,
+    size,
+    color,
+    background,
+    width,
+    height,
+    preserveAlpha,
+    strokeWidth,
+    strokeColor,
+  ])
 
   // Esc to close + body-scroll lock while the modal is open.
   useEffect(() => {
@@ -280,24 +321,16 @@ function FontGenerator({ target, onClose }: Props) {
             </div>
 
             {pick.kind === 'system' && (
-              <div className="prop-row">
-                <label className="prop-field">
-                  <span>Family</span>
-                  <input
-                    type="text"
-                    list="fontgen-fonts"
-                    value={pick.family}
-                    onChange={(e) =>
-                      setPick({ kind: 'system', family: e.target.value })
-                    }
-                  />
-                  <datalist id="fontgen-fonts">
-                    {COMMON_SYSTEM_FONTS.map((f) => (
-                      <option key={f} value={f} />
-                    ))}
-                  </datalist>
-                </label>
-              </div>
+              <label className="prop-field">
+                <span>Family</span>
+                <FontFamilyPicker
+                  value={pick.family}
+                  onChange={(family) =>
+                    setPick({ kind: 'system', family })
+                  }
+                  previewWeight={weight}
+                />
+              </label>
             )}
 
             {pick.kind === 'upload' && (
@@ -325,6 +358,18 @@ function FontGenerator({ target, onClose }: Props) {
 
           <section className="fontgen-section">
             <h3>Glyph parameters</h3>
+            {editableGlyphs && (
+              <label className="prop-field fontgen-text-field">
+                <span>text</span>
+                <input
+                  type="text"
+                  value={customGlyphs[0] ?? ''}
+                  placeholder="e.g. AM, PM, KM, MI, :"
+                  onChange={(e) => setCustomGlyphs([e.target.value])}
+                  autoFocus
+                />
+              </label>
+            )}
             <div className="prop-row">
               <label className="prop-field">
                 <span>w</span>
@@ -406,10 +451,40 @@ function FontGenerator({ target, onClose }: Props) {
                 background, composited live by the watch.
               </p>
             )}
+            <div className="prop-row">
+              <label className="prop-field">
+                <span>stroke (px)</span>
+                <input
+                  type="number"
+                  value={strokeWidth}
+                  min={0}
+                  max={20}
+                  step={0.5}
+                  onChange={(e) =>
+                    setStrokeWidth(Math.max(0, parseFloat(e.target.value) || 0))
+                  }
+                />
+              </label>
+              {strokeWidth > 0 && (
+                <label className="prop-field prop-color">
+                  <span>stroke color</span>
+                  <input
+                    type="color"
+                    value={strokeColor}
+                    onChange={(e) => setStrokeColor(e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    value={strokeColor}
+                    onChange={(e) => setStrokeColor(e.target.value)}
+                  />
+                </label>
+              )}
+            </div>
           </section>
 
           <section className="fontgen-section">
-            <h3>Preview ({bitmaps.length} of {glyphs.length})</h3>
+            <h3>Preview ({bitmaps.length} of {customGlyphs.length})</h3>
             {bitmaps.length === 0 ? (
               <p className="hint">
                 {loaded ? 'Adjust parameters to render the preview.' : 'Pick a font to preview.'}
@@ -430,13 +505,13 @@ function FontGenerator({ target, onClose }: Props) {
                     >
                       <img
                         src={rgbaToDataUrl(b)}
-                        alt={glyphs[i]}
+                        alt={customGlyphs[i]}
                         style={{
                           imageRendering: 'pixelated',
                         }}
                       />
                     </div>
-                    <code className="fontgen-glyph">{glyphs[i]}</code>
+                    <code className="fontgen-glyph">{customGlyphs[i]}</code>
                   </li>
                 ))}
               </ul>

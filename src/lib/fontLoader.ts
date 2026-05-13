@@ -20,15 +20,35 @@ export type LoadedFont = {
  *  enumeration without permission, so we hard-code a curated list and let the
  *  user override via a free-text input. */
 export const COMMON_SYSTEM_FONTS = [
+  // Sans-serif
   'Arial',
+  'Arial Black',
   'Helvetica',
+  'Helvetica Neue',
   'Verdana',
   'Tahoma',
   'Trebuchet MS',
-  'Georgia',
+  'Geneva',
+  'Lucida Sans Unicode',
+  'Impact',
+  // Serif
   'Times New Roman',
+  'Times',
+  'Georgia',
+  'Palatino',
+  'Garamond',
+  'Bookman',
+  // Monospace
   'Courier New',
+  'Courier',
   'Monaco',
+  'Menlo',
+  'Consolas',
+  'Lucida Console',
+  // Display / script
+  'Brush Script MT',
+  'Comic Sans MS',
+  // Generic fallbacks
   'monospace',
   'sans-serif',
   'serif',

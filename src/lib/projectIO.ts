@@ -1444,6 +1444,27 @@ export const glyphsForTypeCType = (type: number): readonly string[] | null => {
   return TYPEC_INSERTABLE_TYPES.find((k) => k.type === type)?.glyphs ?? null
 }
 
+/** Sensible default text for single-slot kinds that the font generator
+ *  paints into. Returns `''` for kinds where text doesn't fit (logos,
+ *  hands, battery icons, animations) so the user is prompted to type
+ *  something — and not nudged toward nonsense like "0" for SEPERATOR. */
+export const defaultGlyphTextForType = (type: number): string => {
+  switch (type) {
+    case 0xf0:
+      return ':' // SEPERATOR — colon between hours and minutes
+    case 0x45:
+      return 'AM' // TIME_AM
+    case 0x46:
+      return 'PM' // TIME_PM
+    case 0xa5:
+      return 'KM' // DIST_KM
+    case 0xa6:
+      return 'MI' // DIST_MI
+    default:
+      return ''
+  }
+}
+
 const DEFAULT_GLYPH_CELL: Record<number, { w: number; h: number }> = (() => {
   const out: Record<number, { w: number; h: number }> = {}
   for (const k of TYPEC_INSERTABLE_TYPES) out[k.type] = k.dim

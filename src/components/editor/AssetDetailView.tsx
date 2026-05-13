@@ -13,6 +13,7 @@ import {
   TYPEC_FONT_INSERTABLE,
   consumersOf,
   decodeBmpFile,
+  defaultGlyphTextForType,
 } from '../../lib/projectIO'
 import BmpPixelEditor from './BmpPixelEditor'
 import FontGenerator, { type FontTarget } from './FontGenerator'
@@ -208,14 +209,29 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
   }
 
   const onRegenerate = () => {
-    const preset = TYPEC_FONT_INSERTABLE.find((k) => k.count === set.count)
+    // Prefer the consuming layer's type — that's the truth for what the
+    // set actually paints, and lets us pre-fill text like "AM" / "PM" / ":"
+    // for single-slot label kinds. Falls back to "first match by slot
+    // count" so orphan sets still get a reasonable preset.
+    const consumer = project.layers.find((l) => l.assetSetId === set.id)
+    const layerType = consumer?.type
+    const presetByType =
+      layerType !== undefined
+        ? TYPEC_FONT_INSERTABLE.find((k) => k.type === layerType)
+        : undefined
+    const presetByCount = TYPEC_FONT_INSERTABLE.find(
+      (k) => k.count === set.count,
+    )
+    const preset = presetByType ?? presetByCount
     const glyphs =
       preset?.glyphs ??
-      Array.from({ length: set.count }, (_, i) => String(i))
+      (set.count === 1
+        ? [defaultGlyphTextForType(layerType ?? 0)]
+        : Array.from({ length: set.count }, (_, i) => String(i)))
     setFontTarget({
       mode: 'replace-typeC-asset-set',
       setId: set.id,
-      type: preset?.type ?? 0x00,
+      type: layerType ?? preset?.type ?? 0x00,
       name: set.name,
       glyphs,
     })
