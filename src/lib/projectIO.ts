@@ -988,6 +988,34 @@ export const reorderLayer = (
   return { ...project, face: { ...project.face, elements: list } }
 }
 
+/** Move a layer from `from` to `to` in the array — drag-to-reorder.
+ *  `to` is the post-removal index (i.e. the slot the layer should occupy
+ *  after the move). Clamps out-of-range values and is a no-op when the
+ *  positions are equal. */
+export const moveLayer = (
+  project: EditorProject,
+  from: number,
+  to: number,
+): EditorProject => {
+  const reorder = <T>(arr: T[]): T[] => {
+    const out = arr.slice()
+    if (from < 0 || from >= out.length) return arr
+    const clampedTo = Math.max(0, Math.min(out.length - 1, to))
+    if (clampedTo === from) return arr
+    const [item] = out.splice(from, 1)
+    out.splice(clampedTo, 0, item)
+    return out
+  }
+  if (project.format === 'typeC') {
+    const layers = reorder(project.layers)
+    return layers === project.layers ? project : { ...project, layers }
+  }
+  const elements = reorder(project.face.elements)
+  return elements === project.face.elements
+    ? project
+    : { ...project, face: { ...project.face, elements } }
+}
+
 /** Remove a layer. Asset sets stay in the library regardless of consumer
  *  count — orphan sets are excluded from the .bin at pack time (see
  *  `materializeTypeC`) but preserved in editor state and ZIP exports. */

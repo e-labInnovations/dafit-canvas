@@ -1,6 +1,5 @@
 import {
-  ChevronDown,
-  ChevronUp,
+  GripVertical,
   Hash,
   Layers,
   Plus,
@@ -38,7 +37,7 @@ function LayerList() {
   const select = useEditor((s) => s.select)
   const toggleSelected = useEditor((s) => s.toggleSelected)
   const selectMany = useEditor((s) => s.selectMany)
-  const reorder = useEditor((s) => s.reorderLayer)
+  const moveLayerTo = useEditor((s) => s.moveLayerTo)
   const remove = useEditor((s) => s.deleteLayer)
   const insertTypeC = useEditor((s) => s.insertTypeC)
   const insertTypeCEmpty = useEditor((s) => s.insertTypeCEmpty)
@@ -59,6 +58,12 @@ function LayerList() {
   const [expandedType, setExpandedType] = useState<number | null>(null)
   const [insertFilter, setInsertFilter] = useState('')
   const [fontTarget, setFontTarget] = useState<FontTarget | null>(null)
+  // Drag-to-reorder state. `dragIdx` is the layer being dragged
+  // (project-array index, not row position). `dragOver` is the layer
+  // currently being hovered over while dragging — used for the visual
+  // drop indicator.
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
 
   const layers = useMemo(() => (project ? listLayers(project) : []), [project])
   const digitSets =
@@ -338,38 +343,62 @@ function LayerList() {
                 }
                 select(l.index)
               }
+              // Drop-indicator position relative to this row: a line
+              // either above or below it depending on whether the cursor
+              // is in the upper or lower half (computed in onDragOver).
+              const isDragging = dragIdx === l.index
+              const isDropTarget = dragOverIdx === l.index && dragIdx !== null
               return (
                 <li
                   key={l.index}
-                  className={`layer-row ${isSelected ? 'selected' : ''} ${isConsumer ? 'consumer' : ''}`}
+                  className={
+                    `layer-row` +
+                    (isSelected ? ' selected' : '') +
+                    (isConsumer ? ' consumer' : '') +
+                    (isDragging ? ' is-dragging' : '') +
+                    (isDropTarget ? ' is-drop-target' : '')
+                  }
+                  draggable
                   onClick={onRowClick}
+                  onDragStart={(e) => {
+                    setDragIdx(l.index)
+                    setDragOverIdx(l.index)
+                    e.dataTransfer.effectAllowed = 'move'
+                    // Firefox refuses to fire dragover events without any
+                    // data payload — set a no-op string.
+                    try {
+                      e.dataTransfer.setData('text/plain', String(l.index))
+                    } catch {
+                      /* some browsers throw on plain text; ignore */
+                    }
+                  }}
+                  onDragOver={(e) => {
+                    if (dragIdx === null) return
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+                    if (dragOverIdx !== l.index) setDragOverIdx(l.index)
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    if (dragIdx === null || dragIdx === l.index) return
+                    moveLayerTo(dragIdx, l.index)
+                  }}
+                  onDragEnd={() => {
+                    setDragIdx(null)
+                    setDragOverIdx(null)
+                  }}
                 >
+                  <span
+                    className="layer-drag-handle"
+                    aria-hidden
+                    title="Drag to reorder"
+                  >
+                    <GripVertical size={14} />
+                  </span>
                   <Layers size={14} aria-hidden />
                   <span className="layer-name" title={l.name}>
                     {l.name}
                   </span>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      reorder(l.index, 'up')
-                    }}
-                    aria-label="Bring forward"
-                  >
-                    <ChevronUp size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      reorder(l.index, 'down')
-                    }}
-                    aria-label="Send backward"
-                  >
-                    <ChevronDown size={14} />
-                  </button>
                   <button
                     type="button"
                     className="icon-btn danger"

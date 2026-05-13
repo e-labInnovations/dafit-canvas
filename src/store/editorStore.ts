@@ -12,6 +12,7 @@ import {
   insertFaceNDigitSet,
   insertFaceNLayer,
   insertTypeCLayer,
+  moveLayer,
   patchFaceNElement,
   patchTypeCLayer,
   rebindLayer,
@@ -113,7 +114,15 @@ type EditorState = {
   selectMany: (idxs: number[], mode?: 'replace' | 'add') => void
   setLayerPosition: (idx: number, x: number, y: number) => void
   reorderLayer: (idx: number, direction: 'up' | 'down') => void
+  /** Move a layer to a specific index (post-removal slot). Used by the
+   *  drag-to-reorder gesture in LayerList. Selection follows the moved
+   *  layer so the user keeps editing the same one. */
+  moveLayerTo: (from: number, to: number) => void
   deleteLayer: (idx: number) => void
+  /** Delete every layer in the current selection in one undo step.
+   *  Iterates highest-index-first so the underlying array stays stable
+   *  while indices shrink. */
+  deleteSelectedLayers: () => void
 
   /** Asset slot replace (BMP-driven). Returns the error message on failure
    *  (e.g. dimension mismatch) so the caller can surface it inline — the
@@ -325,20 +334,34 @@ export const useEditor = create<EditorState>((set, get) => {
   openAssetDetail: (setId) => set({ assetDetailId: setId }),
   closeAssetDetail: () => set({ assetDetailId: null }),
 
-  select: (idx) => set({ selectedIdxs: idx === null ? [] : [idx] }),
+  // Selecting a layer hands the right pane to the layer-properties view.
+  // The asset-detail view stays open only when the user lands on an empty
+  // selection (so they can still browse the library after deselecting).
+  select: (idx) =>
+    set(
+      idx === null
+        ? { selectedIdxs: [] }
+        : { selectedIdxs: [idx], assetDetailId: null },
+    ),
 
   toggleSelected: (idx) =>
     set((state) => {
       const i = state.selectedIdxs.indexOf(idx)
       if (i >= 0) {
-        // Remove — keeps insertion order of the survivors.
+        // Remove — keeps insertion order of the survivors. No panel
+        // switch: the user is shrinking the selection, not picking a
+        // new layer to inspect.
         const next = state.selectedIdxs.slice()
         next.splice(i, 1)
         return { selectedIdxs: next }
       }
-      // Add — append, so the newest selection lands at the end and
-      // `selectedIdxs[0]` stays the original anchor.
-      return { selectedIdxs: [...state.selectedIdxs, idx] }
+      // Add — append so the newest selection lands at the end and
+      // `selectedIdxs[0]` stays the original anchor. Switch panes since
+      // a new layer is now in the selection.
+      return {
+        selectedIdxs: [...state.selectedIdxs, idx],
+        assetDetailId: null,
+      }
     }),
 
   selectMany: (idxs, mode = 'replace') =>
@@ -355,7 +378,12 @@ export const useEditor = create<EditorState>((set, get) => {
         }
         return out
       }
-      if (mode === 'replace') return { selectedIdxs: dedupe(idxs) }
+      if (mode === 'replace') {
+        const next = dedupe(idxs)
+        return next.length > 0
+          ? { selectedIdxs: next, assetDetailId: null }
+          : { selectedIdxs: next }
+      }
       return { selectedIdxs: dedupe([...state.selectedIdxs, ...idxs]) }
     }),
 
@@ -379,6 +407,28 @@ export const useEditor = create<EditorState>((set, get) => {
       return { project: next, selectedIdxs }
     }),
 
+  moveLayerTo: (from, to) =>
+    mutate((state) => {
+      if (!state.project) return state
+      const next = moveLayer(state.project, from, to)
+      if (next === state.project) return state
+      // Re-index selection: the moved item goes to `to`; items between
+      // from and to shift one slot to fill the gap.
+      const remap = (s: number): number => {
+        if (s === from) return to
+        if (from < to) {
+          // Moving forward: items strictly between (from, to] shift left.
+          if (s > from && s <= to) return s - 1
+        } else {
+          // Moving backward: items in [to, from) shift right.
+          if (s >= to && s < from) return s + 1
+        }
+        return s
+      }
+      const selectedIdxs = state.selectedIdxs.map(remap)
+      return { project: next, selectedIdxs }
+    }),
+
   deleteLayer: (idx) =>
     mutate((state) => {
       if (!state.project) return state
@@ -387,6 +437,19 @@ export const useEditor = create<EditorState>((set, get) => {
         .filter((s) => s !== idx)
         .map((s) => (s > idx ? s - 1 : s))
       return { project: next, selectedIdxs }
+    }),
+
+  deleteSelectedLayers: () =>
+    mutate((state) => {
+      if (!state.project || state.selectedIdxs.length === 0) return state
+      // Delete from highest index to lowest so later splices don't shift
+      // the indices we still need to remove.
+      const targets = state.selectedIdxs.slice().sort((a, b) => b - a)
+      let project = state.project
+      for (const idx of targets) {
+        project = deleteLayer(project, idx)
+      }
+      return { project, selectedIdxs: [] }
     }),
 
   replaceAssetAction: (ref, bitmap, opts) => {

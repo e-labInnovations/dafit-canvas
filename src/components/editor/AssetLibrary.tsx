@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { FileInput, Plus, Settings2 } from 'lucide-react'
+import { FileInput, Plus } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
 import { TYPEC_FONT_INSERTABLE, consumersOf } from '../../lib/projectIO'
 import FontGenerator, { type FontTarget } from './FontGenerator'
@@ -97,12 +97,12 @@ const thumbDataUrl = (set: AssetSet): string => {
 
 function AssetLibrary() {
   const project = useEditor((s) => s.project)
-  const renameAssetSetAction = useEditor((s) => s.renameAssetSetAction)
   const createAssetSetAction = useEditor((s) => s.createAssetSetAction)
   const openAssetDetail = useEditor((s) => s.openAssetDetail)
+  // Tracks which set's detail is currently rendered in PropertyPanel so we
+  // can highlight the matching row in the library list.
+  const assetDetailId = useEditor((s) => s.assetDetailId)
 
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [draftName, setDraftName] = useState('')
   const [fontTarget, setFontTarget] = useState<FontTarget | null>(null)
   const [showNewMenu, setShowNewMenu] = useState(false)
   const [showImport, setShowImport] = useState(false)
@@ -206,73 +206,42 @@ function AssetLibrary() {
         {project.assetSets.map((set) => {
           const consumers = consumersOf(project, set.id)
           const url = thumbDataUrl(set)
-          const editing = editingId === set.id
           const isOrphan = consumers.length === 0
+          const isCurrent = set.id === assetDetailId
           return (
-            <li
-              key={set.id}
-              className={`asset-library-row ${isOrphan ? 'orphan' : ''}`}
-            >
-              <div className="asset-library-thumb">
-                {url ? (
-                  <img
-                    src={url}
-                    alt={set.name}
-                    style={{ imageRendering: 'pixelated' }}
-                  />
-                ) : (
-                  <span className="asset-empty">empty</span>
-                )}
-              </div>
-              <div className="asset-library-meta">
-                {editing ? (
-                  <input
-                    type="text"
-                    value={draftName}
-                    autoFocus
-                    onChange={(e) => setDraftName(e.target.value)}
-                    onBlur={() => {
-                      if (draftName.trim()) {
-                        renameAssetSetAction(set.id, draftName.trim())
-                      }
-                      setEditingId(null)
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-                      if (e.key === 'Escape') setEditingId(null)
-                    }}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    className="asset-library-name"
-                    onClick={() => {
-                      setEditingId(set.id)
-                      setDraftName(set.name)
-                    }}
-                    title="Click to rename"
-                  >
-                    {set.name}
-                  </button>
-                )}
-                <span className="asset-library-sub">
-                  {set.count}×{set.width}×{set.height} ·{' '}
-                  {isOrphan
-                    ? 'orphan (not in .bin)'
-                    : `${consumers.length} layer${consumers.length === 1 ? '' : 's'}`}
+            <li key={set.id}>
+              <button
+                type="button"
+                className={
+                  `asset-library-row` +
+                  (isOrphan ? ' orphan' : '') +
+                  (isCurrent ? ' current' : '')
+                }
+                onClick={() => openAssetDetail(set.id)}
+                aria-pressed={isCurrent}
+                title={`Open "${set.name}" details`}
+              >
+                <span className="asset-library-thumb">
+                  {url ? (
+                    <img
+                      src={url}
+                      alt=""
+                      style={{ imageRendering: 'pixelated' }}
+                    />
+                  ) : (
+                    <span className="asset-empty">empty</span>
+                  )}
                 </span>
-              </div>
-              <div className="asset-library-actions">
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-label={`Edit ${set.name}`}
-                  title="Open details"
-                  onClick={() => openAssetDetail(set.id)}
-                >
-                  <Settings2 size={12} />
-                </button>
-              </div>
+                <span className="asset-library-meta">
+                  <span className="asset-library-name">{set.name}</span>
+                  <span className="asset-library-sub">
+                    {set.count}×{set.width}×{set.height} ·{' '}
+                    {isOrphan
+                      ? 'orphan (not in .bin)'
+                      : `${consumers.length} layer${consumers.length === 1 ? '' : 's'}`}
+                  </span>
+                </span>
+              </button>
             </li>
           )
         })}

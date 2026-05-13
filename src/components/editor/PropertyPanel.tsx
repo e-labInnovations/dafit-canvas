@@ -10,6 +10,7 @@ import {
   AlignHorizontalSpaceBetween,
   AlignVerticalDistributeCenter,
   AlignVerticalSpaceBetween,
+  Trash2,
 } from "lucide-react";
 import { useEditor } from "../../store/editorStore";
 import {
@@ -753,6 +754,22 @@ function PropertyPanel() {
   const assetDetailId = useEditor((s) => s.assetDetailId);
   const closeAssetDetail = useEditor((s) => s.closeAssetDetail);
   const setFaceNumber = useEditor((s) => s.setFaceNumber);
+  const deleteSelectedLayers = useEditor((s) => s.deleteSelectedLayers);
+
+  const onDeleteSelected = () => {
+    const n = selectedIdxs.length;
+    if (n === 0) return;
+    // Single delete is Cmd+Z'able and low-cost; confirm only for multi.
+    if (
+      n > 1 &&
+      !window.confirm(
+        `Delete ${n} selected layer${n === 1 ? "" : "s"}? You can undo with Cmd/Ctrl+Z.`,
+      )
+    ) {
+      return;
+    }
+    deleteSelectedLayers();
+  };
 
   const layers = useMemo(() => (project ? listLayers(project) : []), [project]);
   const singleIdx = selectedIdxs.length === 1 ? selectedIdxs[0] : null;
@@ -769,6 +786,11 @@ function PropertyPanel() {
       <aside className="editor-pane editor-props">
         <div className="editor-pane-scroll">
           <AssetDetailView
+            // Remount on set switch so all local state (draft name, local
+            // error banner, font-generator target) resets cleanly. Without
+            // a key change React reuses the same instance and the
+            // useState initialiser only fires once.
+            key={assetDetailId}
             setId={assetDetailId}
             hasLayerContext={layer !== undefined}
             onClose={closeAssetDetail}
@@ -817,6 +839,14 @@ function PropertyPanel() {
               {selectedIdxs.length} layers selected
             </h3>
             <MultiArrangeRow idxs={selectedIdxs} />
+            <button
+              type="button"
+              className="counter ghost danger prop-delete"
+              onClick={onDeleteSelected}
+            >
+              <Trash2 size={14} aria-hidden />
+              Delete {selectedIdxs.length} layers
+            </button>
           </>
         )}
 
@@ -845,6 +875,15 @@ function PropertyPanel() {
                 />
               </>
             )}
+
+            <button
+              type="button"
+              className="counter ghost danger prop-delete"
+              onClick={onDeleteSelected}
+            >
+              <Trash2 size={14} aria-hidden />
+              Delete layer
+            </button>
           </>
         )}
       </div>

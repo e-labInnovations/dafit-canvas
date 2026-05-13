@@ -1655,13 +1655,40 @@
 
 .asset-library-row {
   display: grid;
-  grid-template-columns: 32px 1fr auto;
+  grid-template-columns: 32px 1fr;
   gap: 8px;
   align-items: center;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--bg);
+  /* The whole row is now a button — open detail on click. */
+  cursor: pointer;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+
+  &:hover {
+    border-color: var(--accent-border);
+    background: var(--social-bg);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* The set currently open in the right-sidebar detail view — matches the
+   * `.selected` treatment we use on layer rows so the user has a clear
+   * "you're editing this one" signal. */
+  &.current {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+  }
 }
 
 .asset-library-thumb {
@@ -1685,45 +1712,21 @@
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-
-  input {
-    font: inherit;
-    font-size: 12px;
-    padding: 2px 4px;
-    border: 1px solid var(--accent-border);
-    border-radius: 3px;
-    background: var(--bg);
-    color: var(--text-h);
-  }
 }
 
 .asset-library-name {
   font-family: var(--mono);
   font-size: 12px;
   color: var(--text-h);
-  background: transparent;
-  border: 0;
-  padding: 0;
-  text-align: left;
-  cursor: text;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-
-  &:hover {
-    color: var(--accent);
-  }
 }
 
 .asset-library-sub {
   font-family: var(--mono);
   font-size: 10px;
   color: var(--text);
-}
-
-.asset-library-actions {
-  display: flex;
-  gap: 2px;
 }
 
 .asset-library-row.orphan {
@@ -2589,7 +2592,8 @@
 
 .layer-row {
   display: grid;
-  grid-template-columns: 16px 1fr repeat(3, 24px);
+  /* drag-handle · layers-icon · name · delete */
+  grid-template-columns: 16px 16px 1fr 24px;
   align-items: center;
   gap: 6px;
   padding: 6px 8px;
@@ -2603,6 +2607,7 @@
    * to copy — disable the native selection so multi-select feels clean. */
   user-select: none;
   -webkit-user-select: none;
+  position: relative;
 
   &:hover {
     background: var(--social-bg);
@@ -2624,6 +2629,71 @@
 
   &.consumer.selected {
     box-shadow: inset 0 0 0 1px rgba(120, 170, 255, 0.55);
+  }
+
+  /* The row currently being dragged — fade so the user can see the rest
+   * of the list and pick a drop target. */
+  &.is-dragging {
+    opacity: 0.4;
+  }
+
+  /* Drop indicator — accent ring on the row the cursor is hovering. */
+  &.is-drop-target {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+}
+
+.layer-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  cursor: grab;
+
+  &:active {
+    cursor: grabbing;
+  }
+}
+
+/* Layer-row delete — only visible while the row is hovered / focused or
+ * already selected. Keeps the list tidy when scanning many layers but
+ * still discoverable; keyboard-focus visibility preserves a11y. The
+ * PropertyPanel has its own always-visible delete for the active
+ * selection. */
+.layer-row .icon-btn.danger {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.layer-row:hover .icon-btn.danger,
+.layer-row:focus-within .icon-btn.danger,
+.layer-row.selected .icon-btn.danger,
+.layer-row .icon-btn.danger:focus-visible {
+  opacity: 1;
+}
+
+/* Delete button at the bottom of the layer / multi-select view in
+ * PropertyPanel. Uses the existing `.counter` shell so spacing matches
+ * other action buttons, with a red accent on the icon + label. Top
+ * margin pushes it away from the asset library card above. */
+.prop-delete {
+  margin-top: 16px;
+  margin-bottom: 0;
+  color: rgb(220, 60, 60);
+
+  &:hover {
+    border-color: rgba(220, 60, 60, 0.5);
+    background: rgba(220, 60, 60, 0.08);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    color: #ff8d85;
+
+    &:hover {
+      border-color: rgba(255, 141, 133, 0.5);
+      background: rgba(255, 141, 133, 0.1);
+    }
   }
 }
 
