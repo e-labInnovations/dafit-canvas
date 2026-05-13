@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { defaultDummy } from '../lib/renderFace'
 import { defaultDummyN, type DummyStateN } from '../lib/renderFaceN'
 import {
+  appendAssetSets,
   createTypeCAssetSet,
   deleteAssetSet,
   deleteLayer,
@@ -24,7 +25,12 @@ import {
   type FaceNDigitDependentKind,
   type FaceNInsertableKind,
 } from '../lib/projectIO'
-import type { EditorProject, TypeCLayer, WatchFormat } from '../types/face'
+import type {
+  AssetSet,
+  EditorProject,
+  TypeCLayer,
+  WatchFormat,
+} from '../types/face'
 import type { FaceN } from '../lib/faceN'
 
 type DecodedBitmap = { width: number; height: number; rgba: Uint8ClampedArray }
@@ -136,6 +142,10 @@ type EditorState = {
   /** Add a standalone asset set to the library (no layer references it).
    *  The caller can later bind a layer via the rebind picker. */
   createAssetSetAction: (type: number, bitmaps?: DecodedBitmap[]) => void
+  /** Append asset sets imported from another watch face's project (Type C
+   *  only). Each set gets a fresh id so the library stays unambiguous.
+   *  No layers are created — the user binds via the rebind picker. */
+  importAssetSetsAction: (sets: AssetSet[]) => void
   renameAssetSetAction: (setId: string, name: string) => void
   deleteAssetSetAction: (setId: string) => void
   rebindLayerAction: (layerIdx: number, newSetId: string) => void
@@ -450,6 +460,18 @@ export const useEditor = create<EditorState>((set, get) => {
         const { project: next } = createTypeCAssetSet(state.project, type, {
           bitmaps,
         })
+        return { project: next, error: null }
+      } catch (err) {
+        return { error: errMsg(err) }
+      }
+    }),
+
+  importAssetSetsAction: (sets) =>
+    mutate((state) => {
+      if (!state.project || state.project.format !== 'typeC') return state
+      if (sets.length === 0) return state
+      try {
+        const { project: next } = appendAssetSets(state.project, sets)
         return { project: next, error: null }
       } catch (err) {
         return { error: errMsg(err) }

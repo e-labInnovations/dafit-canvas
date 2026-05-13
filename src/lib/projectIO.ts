@@ -1563,6 +1563,26 @@ export const createTypeCAssetSet = (
   }
 }
 
+/** Append asset sets imported from another project. Each gets a fresh id
+ *  to avoid collisions with sets already in the library. Slot buffers are
+ *  shared by reference — the buffers in our model are immutable per-slot,
+ *  so no copy is needed and we save a few MB on large imports. */
+export const appendAssetSets = (
+  project: TypeCProject,
+  sets: AssetSet[],
+): { project: TypeCProject; newIds: string[] } => {
+  const newIds: string[] = []
+  const fresh = sets.map((s) => {
+    const id = nextId('asset')
+    newIds.push(id)
+    return { ...s, id }
+  })
+  return {
+    project: { ...project, assetSets: [...project.assetSets, ...fresh] },
+    newIds,
+  }
+}
+
 /** Replace the slots of an AssetSet. Counts must match. */
 export const regenerateAssetSet = (
   project: TypeCProject,

@@ -1,9 +1,83 @@
-import { useState } from 'react'
-import { Plus, Settings2 } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { FileInput, Plus, Settings2 } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
 import { TYPEC_FONT_INSERTABLE, consumersOf } from '../../lib/projectIO'
 import FontGenerator, { type FontTarget } from './FontGenerator'
+import ImportAssetsDialog from './ImportAssetsDialog'
 import type { AssetSet } from '../../types/face'
+
+/** Renders children into document.body, positioned just below the anchor.
+ *  Used so popovers can escape a scrolling parent (`.editor-pane-scroll`
+ *  clips overflow-x even though only overflow-y was set to auto). The
+ *  position is recomputed on scroll/resize so the popover tracks its
+ *  anchor while open. Click-outside (and Esc) closes via `onClose`. */
+function PortalPopover({
+  anchorRef,
+  onClose,
+  children,
+}: {
+  anchorRef: React.RefObject<HTMLElement | null>
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const update = () => {
+      const a = anchorRef.current
+      if (!a) return
+      const r = a.getBoundingClientRect()
+      // Align the popover's right edge with the trigger's right edge so it
+      // grows leftward — fits naturally next to a right-aligned button.
+      setPos({
+        top: r.bottom + 4,
+        right: window.innerWidth - r.right,
+      })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [anchorRef])
+
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const a = anchorRef.current
+      const p = ref.current
+      if (!p) return
+      // The anchor handles its own click — only outside clicks close.
+      if (a && a.contains(e.target as Node)) return
+      if (p.contains(e.target as Node)) return
+      onClose()
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [anchorRef, onClose])
+
+  if (!pos) return null
+  return createPortal(
+    <div
+      ref={ref}
+      className="portal-popover"
+      style={{ top: pos.top, right: pos.right }}
+    >
+      {children}
+    </div>,
+    document.body,
+  )
+}
 
 const thumbDataUrl = (set: AssetSet): string => {
   const slot = set.slots.find((s) => s.rgba)
@@ -31,6 +105,8 @@ function AssetLibrary() {
   const [draftName, setDraftName] = useState('')
   const [fontTarget, setFontTarget] = useState<FontTarget | null>(null)
   const [showNewMenu, setShowNewMenu] = useState(false)
+  const [showImport, setShowImport] = useState(false)
+  const newBtnRef = useRef<HTMLButtonElement>(null)
 
   if (project?.format !== 'typeC') return null
 
@@ -62,17 +138,33 @@ function AssetLibrary() {
   return (
     <div className="asset-library">
       <div className="asset-library-header">
-        <h4>Asset library ({project.assetSets.length})</h4>
-        <div className="editor-new-wrap">
-          <button
-            type="button"
-            className="counter ghost"
-            onClick={() => setShowNewMenu((v) => !v)}
+        <h4>
+          Asset library{' '}
+          <span className="asset-library-count">{project.assetSets.length}</span>
+        </h4>
+        <button
+          type="button"
+          className="counter ghost icon-only"
+          onClick={() => setShowImport(true)}
+          title="Import asset sets from another watch face (.bin / .zip)"
+          aria-label="Import assets from another watch face"
+        >
+          <FileInput size={12} aria-hidden />
+        </button>
+        <button
+          ref={newBtnRef}
+          type="button"
+          className="counter ghost"
+          onClick={() => setShowNewMenu((v) => !v)}
+        >
+          <Plus size={12} aria-hidden />
+          New
+        </button>
+        {showNewMenu && (
+          <PortalPopover
+            anchorRef={newBtnRef}
+            onClose={() => setShowNewMenu(false)}
           >
-            <Plus size={12} aria-hidden />
-            New
-          </button>
-          {showNewMenu && (
             <div className="editor-new-menu insert-menu" role="menu">
               <div className="insert-menu-section">Empty set</div>
               {TYPEC_FONT_INSERTABLE.map((k) => (
@@ -90,15 +182,17 @@ function AssetLibrary() {
                 <button
                   key={`font-${k.type}`}
                   type="button"
-                  onClick={() => onCreateFromFont(k.type, k.name, k.glyphs)}
+                  onClick={() =>
+                    onCreateFromFont(k.type, k.name, k.glyphs)
+                  }
                 >
                   {k.name}
                   <span className="insert-menu-tag">{k.count}</span>
                 </button>
               ))}
             </div>
-          )}
-        </div>
+          </PortalPopover>
+        )}
       </div>
 
       {project.assetSets.length === 0 && (
@@ -188,6 +282,10 @@ function AssetLibrary() {
         target={fontTarget}
         onClose={() => setFontTarget(null)}
       />
+
+      {showImport && (
+        <ImportAssetsDialog onClose={() => setShowImport(false)} />
+      )}
     </div>
   )
 }
