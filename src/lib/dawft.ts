@@ -22,6 +22,11 @@ const TYPE_TABLE: Record<number, { count: number; name: string }> = {
   0x44: { count: 10, name: 'TIME_M2' },
   0x45: { count: 1, name: 'TIME_AM' },
   0x46: { count: 1, name: 'TIME_PM' },
+  // 0x47/0x48 appear together in 7 corpus faces — second-pair digit set
+  // (9x14, count=10). Likely an alternate hours/minutes pair. Naming is a
+  // placeholder until firmware docs confirm.
+  0x47: { count: 10, name: 'DIGIT_PAIR1_47' },
+  0x48: { count: 10, name: 'DIGIT_PAIR2_48' },
   0x60: { count: 7, name: 'DAY_NAME' },
   0x61: { count: 7, name: 'DAY_NAME_CN' },
   0x62: { count: 10, name: 'STEPS' },
@@ -31,6 +36,8 @@ const TYPE_TABLE: Record<number, { count: number; name: string }> = {
   0x66: { count: 10, name: 'HR_CA' },
   0x67: { count: 10, name: 'HR_RA' },
   0x68: { count: 10, name: 'KCAL' },
+  // 0x69 in 5 corpus faces, digit-shaped (10x10), co-occurs with HR digits.
+  0x69: { count: 10, name: 'DIGIT_69' },
   0x6b: { count: 10, name: 'MONTH_NUM_B' },
   0x6c: { count: 10, name: 'DAY_NUM_B' },
   0x70: { count: 11, name: 'STEPS_PROGBAR' },
@@ -64,6 +71,9 @@ const TYPE_TABLE: Record<number, { count: number; name: string }> = {
   0xd2: { count: 10, name: 'BATT' },
   0xd3: { count: 10, name: 'BATT_CA' },
   0xd4: { count: 10, name: 'BATT_RA' },
+  // 0xd6: 22 corpus faces, icon-like 32x32 set with 9 frames. Possibly an
+  // animated weather/status icon — named neutrally pending confirmation.
+  0xd6: { count: 9, name: 'ICON_SET_D6' },
   0xd7: { count: 13, name: 'WEATHER_TEMP' },
   0xd8: { count: 13, name: 'WEATHER_TEMP_CA' },
   0xd9: { count: 13, name: 'WEATHER_TEMP_RA' },

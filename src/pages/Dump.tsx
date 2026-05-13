@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Binary,
   Copy,
+  Download,
   FileUp,
   Package,
 } from 'lucide-react'
@@ -70,6 +71,22 @@ const renderRgbaPreview = (
   imgData.data.set(rgba)
   ctx.putImageData(imgData, 0, 0)
   return canvas.toDataURL('image/png')
+}
+
+const downloadBytes = (bytes: Uint8Array, filename: string, mime: string) => {
+  // Copy into a fresh ArrayBuffer-backed view so Blob accepts it under TS6's
+  // stricter BlobPart typing (which rejects bare ArrayBufferLike views).
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  const blob = new Blob([copy.buffer], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 function Dump() {
@@ -374,6 +391,22 @@ function Dump() {
           <ul className="blob-grid">
             {parsed.blobs.map((b, i) => {
               const previewUrl = parsed.previews[i]
+              const canExportBmp =
+                b.rgba !== null && b.width !== null && b.height !== null
+              const onDownload = () => {
+                const base = padIdx(b.index)
+                if (canExportBmp) {
+                  downloadBytes(
+                    encodeBmpRgb565(b.rgba!, b.width!, b.height!),
+                    `${base}.bmp`,
+                    'image/bmp',
+                  )
+                } else {
+                  // Blob we couldn't decode (no faceData claim, undecodable RLE,
+                  // etc.) — surface the raw bytes so the user can still inspect.
+                  downloadBytes(b.raw, `${base}.raw`, 'application/octet-stream')
+                }
+              }
               return (
                 <li key={b.index} className="blob-card">
                   <div className="blob-thumb">
@@ -386,6 +419,15 @@ function Dump() {
                     ) : (
                       <span className="blob-noimg">raw</span>
                     )}
+                    <button
+                      type="button"
+                      className="blob-download"
+                      onClick={onDownload}
+                      title={canExportBmp ? 'Download as BMP' : 'Download raw bytes'}
+                      aria-label={canExportBmp ? 'Download as BMP' : 'Download raw bytes'}
+                    >
+                      <Download size={12} aria-hidden />
+                    </button>
                   </div>
                   <div className="blob-meta">
                     <code className="blob-name">{padIdx(b.index)}.bmp</code>
@@ -482,28 +524,55 @@ function Dump() {
             <div key={sIdx} className="digit-set">
               <h3 className="digit-set-title">Set {sIdx}</h3>
               <ul className="blob-grid digits-row">
-                {set.digits.map((d, dIdx) => (
-                  <li key={dIdx} className="blob-card">
-                    <div className="blob-thumb">
-                      {d.rgba ? (
-                        <img
-                          src={renderRgbaPreview(d.rgba, d.width, d.height)}
-                          alt={`Set ${sIdx} digit ${dIdx}`}
-                          style={{ imageRendering: 'pixelated' }}
-                        />
-                      ) : (
-                        <span className="blob-noimg">raw</span>
-                      )}
-                    </div>
-                    <div className="blob-meta">
-                      <code className="blob-name">{dIdx}</code>
-                      <span className="blob-dim">
-                        {d.width}×{d.height}
-                      </span>
-                      <span className="blob-size">{formatBytes(d.rawSize)}</span>
-                    </div>
-                  </li>
-                ))}
+                {set.digits.map((d, dIdx) => {
+                  const canExportBmp = d.rgba !== null && d.width > 0 && d.height > 0
+                  const onDownload = () => {
+                    const name = `set-${sIdx}-digit-${dIdx}`
+                    if (canExportBmp) {
+                      downloadBytes(
+                        encodeBmp32(d.rgba!, d.width, d.height),
+                        `${name}.bmp`,
+                        'image/bmp',
+                      )
+                    }
+                    // FaceN digit blobs are decoded straight from rgba; there's
+                    // no useful raw fallback the way Type C has, so the button
+                    // is disabled when rgba is missing.
+                  }
+                  return (
+                    <li key={dIdx} className="blob-card">
+                      <div className="blob-thumb">
+                        {d.rgba ? (
+                          <img
+                            src={renderRgbaPreview(d.rgba, d.width, d.height)}
+                            alt={`Set ${sIdx} digit ${dIdx}`}
+                            style={{ imageRendering: 'pixelated' }}
+                          />
+                        ) : (
+                          <span className="blob-noimg">raw</span>
+                        )}
+                        {canExportBmp && (
+                          <button
+                            type="button"
+                            className="blob-download"
+                            onClick={onDownload}
+                            title="Download as BMP"
+                            aria-label="Download as BMP"
+                          >
+                            <Download size={12} aria-hidden />
+                          </button>
+                        )}
+                      </div>
+                      <div className="blob-meta">
+                        <code className="blob-name">{dIdx}</code>
+                        <span className="blob-dim">
+                          {d.width}×{d.height}
+                        </span>
+                        <span className="blob-size">{formatBytes(d.rawSize)}</span>
+                      </div>
+                    </li>
+                  )
+                })}
               </ul>
             </div>
           ))}

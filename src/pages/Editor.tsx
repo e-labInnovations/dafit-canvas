@@ -6,6 +6,7 @@ import {
   FilePlus2,
   FolderOpen,
   Package,
+  X,
 } from "lucide-react";
 import EditorCanvas from "../components/editor/EditorCanvas";
 import LayerList from "../components/editor/LayerList";
@@ -168,6 +169,15 @@ function Editor() {
           <div>
             <strong>Editor:</strong> {error}
           </div>
+          <button
+            type="button"
+            className="banner-dismiss"
+            onClick={() => setError(null)}
+            aria-label="Dismiss error"
+            title="Dismiss"
+          >
+            <X size={16} aria-hidden />
+          </button>
         </div>
       )}
 

@@ -1233,29 +1233,7 @@ const patchElementAsset = (
   }
 }
 
-// ---------- insert (single-blob + multi-blob, Type C) ----------
-
-export const TYPEC_INSERTABLE: { type: number; name: string }[] = [
-  { type: 0x01, name: 'BACKGROUND' },
-  { type: 0x45, name: 'TIME_AM' },
-  { type: 0x46, name: 'TIME_PM' },
-  { type: 0x71, name: 'STEPS_LOGO' },
-  { type: 0x81, name: 'HR_LOGO' },
-  { type: 0x91, name: 'KCAL_LOGO' },
-  { type: 0xa1, name: 'DIST_LOGO' },
-  { type: 0xa5, name: 'DIST_KM' },
-  { type: 0xa6, name: 'DIST_MI' },
-  { type: 0xc0, name: 'BTLINK_UP' },
-  { type: 0xc1, name: 'BTLINK_DOWN' },
-  { type: 0xce, name: 'BATT_IMG' },
-  { type: 0xd1, name: 'BATT_IMG_C' },
-  { type: 0xf0, name: 'SEPERATOR' },
-  { type: 0xf1, name: 'HAND_HOUR' },
-  { type: 0xf2, name: 'HAND_MINUTE' },
-  { type: 0xf3, name: 'HAND_SEC' },
-  { type: 0xf4, name: 'HAND_PIN_UPPER' },
-  { type: 0xf5, name: 'HAND_PIN_LOWER' },
-]
+// ---------- insert (Type C) ----------
 
 const DIGITS = ['0','1','2','3','4','5','6','7','8','9'] as const
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] as const
@@ -1263,51 +1241,119 @@ const MONTHS = [
   'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec',
 ] as const
 
+/** Unified Insert catalogue for Type C. Single source of truth — replaces the
+ *  separate single-blob and multi-blob arrays. The `count`, `dim`, and `pos`
+ *  defaults are corpus-derived (see `scripts/analyze-corpus.ts` /
+ *  `faces-corpus/_type-defaults.json`); regenerating the corpus stats and
+ *  refreshing this table is the right way to add a new type. `faces` is the
+ *  prevalence in the 387-face corpus and drives display order. */
+export type InsertableType = {
+  type: number
+  name: string
+  count: number
+  dim: { w: number; h: number }
+  pos: { x: number; y: number }
+  faces: number
+  glyphs?: readonly string[]
+}
+
+export const TYPEC_INSERTABLE_TYPES: InsertableType[] = [
+  // Time digits (count=10, the most popular types in the corpus)
+  { type: 0x40, name: 'TIME_H1', count: 10, dim: { w: 21, h: 30 }, pos: { x: 53, y: 54 }, faces: 337, glyphs: DIGITS },
+  { type: 0x41, name: 'TIME_H2', count: 10, dim: { w: 21, h: 30 }, pos: { x: 86, y: 54 }, faces: 337, glyphs: DIGITS },
+  { type: 0x43, name: 'TIME_M1', count: 10, dim: { w: 21, h: 30 }, pos: { x: 129, y: 89 }, faces: 336, glyphs: DIGITS },
+  { type: 0x44, name: 'TIME_M2', count: 10, dim: { w: 21, h: 30 }, pos: { x: 161, y: 89 }, faces: 336, glyphs: DIGITS },
+  { type: 0x01, name: 'BACKGROUND', count: 1, dim: { w: 240, h: 240 }, pos: { x: 0, y: 0 }, faces: 311 },
+  { type: 0x60, name: 'DAY_NAME', count: 7, dim: { w: 43, h: 16 }, pos: { x: 89, y: 96 }, faces: 200, glyphs: DAYS },
+  { type: 0x30, name: 'DAY_NUM', count: 10, dim: { w: 8, h: 12 }, pos: { x: 133, y: 96 }, faces: 147, glyphs: DIGITS },
+  { type: 0x00, name: 'BACKGROUNDS', count: 10, dim: { w: 240, h: 24 }, pos: { x: 0, y: 0 }, faces: 71 },
+  { type: 0xf1, name: 'HAND_HOUR', count: 1, dim: { w: 14, h: 92 }, pos: { x: 113, y: 56 }, faces: 57 },
+  { type: 0xf2, name: 'HAND_MINUTE', count: 1, dim: { w: 12, h: 120 }, pos: { x: 114, y: 27 }, faces: 57 },
+  { type: 0x73, name: 'STEPS_B_CA', count: 10, dim: { w: 8, h: 13 }, pos: { x: 121, y: 170 }, faces: 50, glyphs: DIGITS },
+  { type: 0xf3, name: 'HAND_SEC', count: 1, dim: { w: 7, h: 121 }, pos: { x: 117, y: 16 }, faces: 49 },
+  { type: 0xda, name: 'BATT_IMG_D', count: 11, dim: { w: 42, h: 21 }, pos: { x: 73, y: 111 }, faces: 43 },
+  { type: 0xf4, name: 'HAND_PIN_UPPER', count: 1, dim: { w: 13, h: 7 }, pos: { x: 115, y: 115 }, faces: 40 },
+  { type: 0xf5, name: 'HAND_PIN_LOWER', count: 2, dim: { w: 8, h: 4 }, pos: { x: 115, y: 120 }, faces: 39 },
+  { type: 0x83, name: 'HR_B_CA', count: 10, dim: { w: 7, h: 11 }, pos: { x: 135, y: 158 }, faces: 34, glyphs: DIGITS },
+  { type: 0x11, name: 'MONTH_NUM', count: 10, dim: { w: 8, h: 12 }, pos: { x: 90, y: 80 }, faces: 33, glyphs: DIGITS },
+  { type: 0x45, name: 'TIME_AM', count: 1, dim: { w: 23, h: 18 }, pos: { x: 109, y: 83 }, faces: 32 },
+  { type: 0x46, name: 'TIME_PM', count: 1, dim: { w: 23, h: 18 }, pos: { x: 109, y: 83 }, faces: 32 },
+  { type: 0x70, name: 'STEPS_PROGBAR', count: 11, dim: { w: 56, h: 56 }, pos: { x: 38, y: 128 }, faces: 29 },
+  { type: 0x93, name: 'KCAL_B_CA', count: 10, dim: { w: 7, h: 11 }, pos: { x: 131, y: 128 }, faces: 27, glyphs: DIGITS },
+  { type: 0xf0, name: 'SEPERATOR', count: 1, dim: { w: 7, h: 45 }, pos: { x: 115, y: 95 }, faces: 26 },
+  { type: 0xd6, name: 'ICON_SET_D6', count: 9, dim: { w: 32, h: 32 }, pos: { x: 104, y: 51 }, faces: 22 },
+  { type: 0x72, name: 'STEPS_B', count: 10, dim: { w: 10, h: 17 }, pos: { x: 89, y: 130 }, faces: 19, glyphs: DIGITS },
+  { type: 0x10, name: 'MONTH_NAME', count: 12, dim: { w: 40, h: 16 }, pos: { x: 108, y: 69 }, faces: 19, glyphs: MONTHS },
+  { type: 0x6c, name: 'DAY_NUM_B', count: 10, dim: { w: 11, h: 16 }, pos: { x: 113, y: 125 }, faces: 19, glyphs: DIGITS },
+  { type: 0xd1, name: 'BATT_IMG_C', count: 1, dim: { w: 32, h: 16 }, pos: { x: 105, y: 113 }, faces: 15 },
+  { type: 0xc0, name: 'BTLINK_UP', count: 1, dim: { w: 31, h: 12 }, pos: { x: 112, y: 49 }, faces: 14 },
+  { type: 0x74, name: 'STEPS_B_RA', count: 10, dim: { w: 11, h: 16 }, pos: { x: 141, y: 156 }, faces: 13, glyphs: DIGITS },
+  { type: 0x80, name: 'HR_PROGBAR', count: 11, dim: { w: 66, h: 66 }, pos: { x: 87, y: 86 }, faces: 11 },
+  { type: 0xa5, name: 'DIST_KM', count: 1, dim: { w: 17, h: 12 }, pos: { x: 184, y: 140 }, faces: 11 },
+  { type: 0xa6, name: 'DIST_MI', count: 1, dim: { w: 17, h: 12 }, pos: { x: 184, y: 140 }, faces: 11 },
+  { type: 0x90, name: 'KCAL_PROGBAR', count: 11, dim: { w: 52, h: 52 }, pos: { x: 119, y: 153 }, faces: 10 },
+  { type: 0x6b, name: 'MONTH_NUM_B', count: 10, dim: { w: 11, h: 16 }, pos: { x: 65, y: 206 }, faces: 10, glyphs: DIGITS },
+  { type: 0x92, name: 'KCAL_B', count: 10, dim: { w: 7, h: 17 }, pos: { x: 116, y: 170 }, faces: 9, glyphs: DIGITS },
+  { type: 0xc1, name: 'BTLINK_DOWN', count: 1, dim: { w: 20, h: 20 }, pos: { x: 110, y: 30 }, faces: 9 },
+  { type: 0xa3, name: 'DIST_CA', count: 10, dim: { w: 11, h: 18 }, pos: { x: 121, y: 166 }, faces: 8, glyphs: DIGITS },
+  { type: 0x47, name: 'DIGIT_PAIR1_47', count: 10, dim: { w: 9, h: 14 }, pos: { x: 183, y: 96 }, faces: 8, glyphs: DIGITS },
+  { type: 0x48, name: 'DIGIT_PAIR2_48', count: 10, dim: { w: 9, h: 14 }, pos: { x: 198, y: 96 }, faces: 8, glyphs: DIGITS },
+  { type: 0xd8, name: 'WEATHER_TEMP_CA', count: 13, dim: { w: 7, h: 10 }, pos: { x: 76, y: 112 }, faces: 7 },
+  { type: 0x66, name: 'HR_CA', count: 10, dim: { w: 10, h: 16 }, pos: { x: 122, y: 160 }, faces: 7, glyphs: DIGITS },
+  { type: 0x84, name: 'HR_B_RA', count: 10, dim: { w: 8, h: 13 }, pos: { x: 133, y: 180 }, faces: 7, glyphs: DIGITS },
+  { type: 0xd4, name: 'BATT_RA', count: 10, dim: { w: 11, h: 16 }, pos: { x: 185, y: 55 }, faces: 7, glyphs: DIGITS },
+  { type: 0x94, name: 'KCAL_B_RA', count: 10, dim: { w: 11, h: 16 }, pos: { x: 115, y: 180 }, faces: 7, glyphs: DIGITS },
+  { type: 0xa4, name: 'DIST_RA', count: 10, dim: { w: 11, h: 16 }, pos: { x: 224, y: 131 }, faces: 6, glyphs: DIGITS },
+  { type: 0x63, name: 'STEPS_CA', count: 10, dim: { w: 8, h: 14 }, pos: { x: 125, y: 177 }, faces: 5, glyphs: DIGITS },
+  { type: 0x82, name: 'HR_B', count: 10, dim: { w: 9, h: 13 }, pos: { x: 135, y: 187 }, faces: 5, glyphs: DIGITS },
+  { type: 0x69, name: 'DIGIT_69', count: 10, dim: { w: 10, h: 10 }, pos: { x: 121, y: 79 }, faces: 5, glyphs: DIGITS },
+  { type: 0x12, name: 'YEAR', count: 10, dim: { w: 9, h: 16 }, pos: { x: 58, y: 148 }, faces: 4, glyphs: DIGITS },
+  { type: 0xd3, name: 'BATT_CA', count: 10, dim: { w: 7, h: 10 }, pos: { x: 113, y: 190 }, faces: 4, glyphs: DIGITS },
+  { type: 0xd2, name: 'BATT', count: 10, dim: { w: 12, h: 16 }, pos: { x: 113, y: 190 }, faces: 0, glyphs: DIGITS },
+  { type: 0x71, name: 'STEPS_LOGO', count: 1, dim: { w: 22, h: 18 }, pos: { x: 107, y: 141 }, faces: 2 },
+  { type: 0x91, name: 'KCAL_LOGO', count: 1, dim: { w: 13, h: 18 }, pos: { x: 196, y: 141 }, faces: 2 },
+  { type: 0xa1, name: 'DIST_LOGO', count: 1, dim: { w: 14, h: 18 }, pos: { x: 110, y: 140 }, faces: 1 },
+  { type: 0x81, name: 'HR_LOGO', count: 1, dim: { w: 16, h: 16 }, pos: { x: 110, y: 140 }, faces: 0 },
+  { type: 0xce, name: 'BATT_IMG', count: 1, dim: { w: 32, h: 16 }, pos: { x: 105, y: 113 }, faces: 0 },
+]
+
+/** Legacy view: types listed as "Single BMP" in the old Insert menu. Kept for
+ *  any external consumer (e.g., FontGenerator preset lookup). Prefer the
+ *  unified [TYPEC_INSERTABLE_TYPES] for new code. */
+export const TYPEC_INSERTABLE = TYPEC_INSERTABLE_TYPES.filter((k) => k.count === 1).map(
+  (k) => ({ type: k.type, name: k.name }),
+)
+
+/** Legacy view: same data, filtered to multi-blob font-able types (count > 1
+ *  and a `glyphs` array). FontGenerator and AssetDetailModal still consume
+ *  this shape. */
 export const TYPEC_FONT_INSERTABLE: {
   type: number
   name: string
   count: number
   glyphs: readonly string[]
-}[] = [
-  { type: 0x40, name: 'TIME_H1', count: 10, glyphs: DIGITS },
-  { type: 0x41, name: 'TIME_H2', count: 10, glyphs: DIGITS },
-  { type: 0x43, name: 'TIME_M1', count: 10, glyphs: DIGITS },
-  { type: 0x44, name: 'TIME_M2', count: 10, glyphs: DIGITS },
-  { type: 0x45, name: 'TIME_AM', count: 1, glyphs: ['AM'] },
-  { type: 0x46, name: 'TIME_PM', count: 1, glyphs: ['PM'] },
-  { type: 0x30, name: 'DAY_NUM', count: 10, glyphs: DIGITS },
-  { type: 0x11, name: 'MONTH_NUM', count: 10, glyphs: DIGITS },
-  { type: 0x12, name: 'YEAR', count: 10, glyphs: DIGITS },
-  { type: 0x72, name: 'STEPS_B', count: 10, glyphs: DIGITS },
-  { type: 0x73, name: 'STEPS_B_CA', count: 10, glyphs: DIGITS },
-  { type: 0x74, name: 'STEPS_B_RA', count: 10, glyphs: DIGITS },
-  { type: 0x82, name: 'HR_B', count: 10, glyphs: DIGITS },
-  { type: 0x83, name: 'HR_B_CA', count: 10, glyphs: DIGITS },
-  { type: 0x84, name: 'HR_B_RA', count: 10, glyphs: DIGITS },
-  { type: 0x92, name: 'KCAL_B', count: 10, glyphs: DIGITS },
-  { type: 0x93, name: 'KCAL_B_CA', count: 10, glyphs: DIGITS },
-  { type: 0x94, name: 'KCAL_B_RA', count: 10, glyphs: DIGITS },
-  { type: 0xd2, name: 'BATT', count: 10, glyphs: DIGITS },
-  { type: 0xd3, name: 'BATT_CA', count: 10, glyphs: DIGITS },
-  { type: 0xd4, name: 'BATT_RA', count: 10, glyphs: DIGITS },
-  { type: 0x60, name: 'DAY_NAME', count: 7, glyphs: DAYS },
-  { type: 0x10, name: 'MONTH_NAME', count: 12, glyphs: MONTHS },
-]
+}[] = TYPEC_INSERTABLE_TYPES.filter((k) => !!k.glyphs).map((k) => ({
+  type: k.type,
+  name: k.name,
+  count: k.count,
+  glyphs: k.glyphs!,
+}))
 
 export const glyphsForTypeCType = (type: number): readonly string[] | null => {
-  return TYPEC_FONT_INSERTABLE.find((k) => k.type === type)?.glyphs ?? null
+  return TYPEC_INSERTABLE_TYPES.find((k) => k.type === type)?.glyphs ?? null
 }
 
-const DEFAULT_GLYPH_CELL: Record<number, { w: number; h: number }> = {
-  0x40: { w: 24, h: 36 }, 0x41: { w: 24, h: 36 }, 0x43: { w: 24, h: 36 }, 0x44: { w: 24, h: 36 },
-  0x30: { w: 16, h: 24 }, 0x11: { w: 16, h: 24 }, 0x12: { w: 16, h: 24 },
-  0x72: { w: 12, h: 16 }, 0x73: { w: 12, h: 16 }, 0x74: { w: 12, h: 16 },
-  0x82: { w: 12, h: 16 }, 0x83: { w: 12, h: 16 }, 0x84: { w: 12, h: 16 },
-  0x92: { w: 12, h: 16 }, 0x93: { w: 12, h: 16 }, 0x94: { w: 12, h: 16 },
-  0xd2: { w: 12, h: 16 }, 0xd3: { w: 12, h: 16 }, 0xd4: { w: 12, h: 16 },
-  0x45: { w: 24, h: 12 }, 0x46: { w: 24, h: 12 },
-  0x60: { w: 28, h: 14 }, 0x10: { w: 28, h: 14 },
-}
+const DEFAULT_GLYPH_CELL: Record<number, { w: number; h: number }> = (() => {
+  const out: Record<number, { w: number; h: number }> = {}
+  for (const k of TYPEC_INSERTABLE_TYPES) out[k.type] = k.dim
+  return out
+})()
+
+const DEFAULT_POSITION: Record<number, { x: number; y: number }> = (() => {
+  const out: Record<number, { x: number; y: number }> = {}
+  for (const k of TYPEC_INSERTABLE_TYPES) out[k.type] = k.pos
+  return out
+})()
 
 const placeholderSlot = (): AssetSlot => ({ rgba: null })
 
@@ -1342,7 +1388,12 @@ export const insertTypeCLayer = (
     name?: string
   } = {},
 ): TypeCProject => {
-  const { assetSetId, bitmaps, position = { x: 120, y: 120 }, name } = options
+  const {
+    assetSetId,
+    bitmaps,
+    position = DEFAULT_POSITION[type] ?? { x: 120, y: 120 },
+    name,
+  } = options
 
   let setId: string
   let assetSets = project.assetSets

@@ -3,7 +3,6 @@ import { Plus, Settings2 } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
 import { TYPEC_FONT_INSERTABLE, consumersOf } from '../../lib/projectIO'
 import FontGenerator, { type FontTarget } from './FontGenerator'
-import AssetDetailModal from './AssetDetailModal'
 import type { AssetSet } from '../../types/face'
 
 const thumbDataUrl = (set: AssetSet): string => {
@@ -26,11 +25,11 @@ function AssetLibrary() {
   const project = useEditor((s) => s.project)
   const renameAssetSetAction = useEditor((s) => s.renameAssetSetAction)
   const createAssetSetAction = useEditor((s) => s.createAssetSetAction)
+  const openAssetDetail = useEditor((s) => s.openAssetDetail)
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
   const [fontTarget, setFontTarget] = useState<FontTarget | null>(null)
-  const [detailSetId, setDetailSetId] = useState<string | null>(null)
   const [showNewMenu, setShowNewMenu] = useState(false)
 
   if (project?.format !== 'typeC') return null
@@ -175,7 +174,7 @@ function AssetLibrary() {
                   className="icon-btn"
                   aria-label={`Edit ${set.name}`}
                   title="Open details"
-                  onClick={() => setDetailSetId(set.id)}
+                  onClick={() => openAssetDetail(set.id)}
                 >
                   <Settings2 size={12} />
                 </button>
@@ -188,11 +187,6 @@ function AssetLibrary() {
       <FontGenerator
         target={fontTarget}
         onClose={() => setFontTarget(null)}
-      />
-      <AssetDetailModal
-        key={detailSetId ?? 'closed'}
-        setId={detailSetId}
-        onClose={() => setDetailSetId(null)}
       />
     </div>
   )

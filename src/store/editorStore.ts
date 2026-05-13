@@ -34,8 +34,14 @@ type EditorState = {
   /** null = no project yet (post-fresh-load, before user picks New or imports). */
   project: EditorProject | null
   selectedIdx: number | null
+  /** When non-null, the right sidebar shows the matching AssetSet's detail
+   *  view instead of the layer property panel. Cleared automatically when the
+   *  project is replaced or the set is deleted. */
+  assetDetailId: string | null
   dummy: DummyStateN
-  /** Last load/save error message (or null). */
+  /** Last load/save error message (or null). Asset-detail-scope errors
+   *  (dimension mismatches, etc.) go inline in `AssetDetailView` rather than
+   *  this global slot to keep banners near the action that produced them. */
   error: string | null
 
   // top-level actions
@@ -44,18 +50,24 @@ type EditorState = {
   clearProject: () => void
   setError: (msg: string | null) => void
 
+  // Right-sidebar mode switch (layer ↔ asset detail).
+  openAssetDetail: (setId: string) => void
+  closeAssetDetail: () => void
+
   // layer actions
   select: (idx: number | null) => void
   setLayerPosition: (idx: number, x: number, y: number) => void
   reorderLayer: (idx: number, direction: 'up' | 'down') => void
   deleteLayer: (idx: number) => void
 
-  // asset slot replace (BMP-driven)
+  /** Asset slot replace (BMP-driven). Returns the error message on failure
+   *  (e.g. dimension mismatch) so the caller can surface it inline — the
+   *  store no longer mutates `error` for this action. */
   replaceAssetAction: (
     ref: AssetRef,
     bitmap: DecodedBitmap,
     requireDimMatch?: boolean,
-  ) => void
+  ) => string | null
 
   // Type C inserts
   /** Single-blob kind insert with a user-picked BMP. */
@@ -122,20 +134,31 @@ type EditorState = {
 const errMsg = (err: unknown): string =>
   err instanceof Error ? err.message : String(err)
 
-export const useEditor = create<EditorState>((set) => ({
+export const useEditor = create<EditorState>((set, get) => ({
   project: null,
   selectedIdx: null,
+  assetDetailId: null,
   dummy: defaultDummyN(defaultDummy()),
   error: null,
 
   newProject: (format) =>
-    set({ project: emptyProject(format), selectedIdx: null, error: null }),
+    set({
+      project: emptyProject(format),
+      selectedIdx: null,
+      assetDetailId: null,
+      error: null,
+    }),
 
-  setProject: (project) => set({ project, selectedIdx: null, error: null }),
+  setProject: (project) =>
+    set({ project, selectedIdx: null, assetDetailId: null, error: null }),
 
-  clearProject: () => set({ project: null, selectedIdx: null, error: null }),
+  clearProject: () =>
+    set({ project: null, selectedIdx: null, assetDetailId: null, error: null }),
 
   setError: (msg) => set({ error: msg }),
+
+  openAssetDetail: (setId) => set({ assetDetailId: setId }),
+  closeAssetDetail: () => set({ assetDetailId: null }),
 
   select: (idx) => set({ selectedIdx: idx }),
 
@@ -164,16 +187,17 @@ export const useEditor = create<EditorState>((set) => ({
       return { project: next, selectedIdx: newSel }
     }),
 
-  replaceAssetAction: (ref, bitmap, requireDimMatch = true) =>
-    set((state) => {
-      if (!state.project) return state
-      try {
-        const next = replaceAsset(state.project, ref, bitmap, { requireDimMatch })
-        return { project: next, error: null }
-      } catch (err) {
-        return { error: errMsg(err) }
-      }
-    }),
+  replaceAssetAction: (ref, bitmap, requireDimMatch = true) => {
+    const project = get().project
+    if (!project) return 'No project loaded.'
+    try {
+      const next = replaceAsset(project, ref, bitmap, { requireDimMatch })
+      set({ project: next })
+      return null
+    } catch (err) {
+      return errMsg(err)
+    }
+  },
 
   insertTypeC: (type, bitmap) =>
     set((state) => {
@@ -246,7 +270,14 @@ export const useEditor = create<EditorState>((set) => ({
     set((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
-        return { project: deleteAssetSet(state.project, setId), error: null }
+        return {
+          project: deleteAssetSet(state.project, setId),
+          error: null,
+          // The detail view targets a set that no longer exists — close it so
+          // PropertyPanel doesn't try to render a missing AssetSet.
+          assetDetailId:
+            state.assetDetailId === setId ? null : state.assetDetailId,
+        }
       } catch (err) {
         return { error: errMsg(err) }
       }
