@@ -30,6 +30,27 @@ import type { FaceN } from '../lib/faceN'
 type DecodedBitmap = { width: number; height: number; rgba: Uint8ClampedArray }
 type FNEl = FaceN['elements'][number]
 
+/** What we restore on undo: project state + selection state. We deliberately
+ *  do NOT capture selection-only changes (those would be noisy in the undo
+ *  stack), but every project mutation saves the selection that was active
+ *  at the time so undo restores both. */
+type Snapshot = {
+  project: EditorProject
+  selectedIdxs: number[]
+}
+
+/** One step on the undo stack. `key` is used by `mutate` to coalesce rapid
+ *  follow-up changes of the same kind (e.g. a drag's 100 `setLayerPosition`
+ *  calls become a single undo entry). */
+type HistoryEntry = {
+  snapshot: Snapshot
+  key: string
+  timestamp: number
+}
+
+const HISTORY_LIMIT = 100
+const MERGE_WINDOW_MS = 1000
+
 type EditorState = {
   /** null = no project yet (post-fresh-load, before user picks New or imports). */
   project: EditorProject | null
@@ -39,6 +60,12 @@ type EditorState = {
    *  matters: `selectedIdxs[0]` is the anchor (the "first selected" layer)
    *  used by range-select in LayerList and by the Relative-to selector. */
   selectedIdxs: number[]
+  /** Undo stack — past snapshots. Most recent at the end. Cleared when a
+   *  fresh project is loaded (a different file has no meaningful history). */
+  history: HistoryEntry[]
+  /** Redo stack — snapshots that were undone. Cleared by any forward
+   *  project mutation. */
+  future: Snapshot[]
   /** When non-null, the right sidebar shows the matching AssetSet's detail
    *  view instead of the layer property panel. Cleared automatically when the
    *  project is replaced or the set is deleted. */
@@ -54,6 +81,14 @@ type EditorState = {
   setProject: (project: EditorProject) => void
   clearProject: () => void
   setError: (msg: string | null) => void
+
+  // History
+  /** Pop the most recent snapshot off `history` and apply it, pushing the
+   *  current state to `future`. No-op when `history` is empty. */
+  undo: () => void
+  /** Reverse of undo: pop from `future`, apply, and push current state back
+   *  onto `history`. */
+  redo: () => void
 
   // Right-sidebar mode switch (layer ↔ asset detail).
   openAssetDetail: (setId: string) => void
@@ -148,9 +183,54 @@ type EditorState = {
 const errMsg = (err: unknown): string =>
   err instanceof Error ? err.message : String(err)
 
-export const useEditor = create<EditorState>((set, get) => ({
+export const useEditor = create<EditorState>((set, get) => {
+  /** Wrap `set` with undo-history bookkeeping. The reducer runs *before*
+   *  the history push so we capture the project's pre-mutation state.
+   *  Successive calls with the same `key` within MERGE_WINDOW_MS replace
+   *  the previous entry's timestamp (keeping its older snapshot) so a
+   *  drag or keystroke run collapses to one undo step. */
+  const mutate = (
+    reducer: (state: EditorState) => Partial<EditorState> | EditorState,
+    key = '',
+  ) => {
+    set((state) => {
+      const result = reducer(state)
+      // If there's no project, there's nothing meaningful to undo. Skip
+      // history bookkeeping but still apply the result.
+      if (!state.project) return result
+      const beforeSnapshot: Snapshot = {
+        project: state.project,
+        selectedIdxs: state.selectedIdxs,
+      }
+      const last = state.history[state.history.length - 1]
+      const now = Date.now()
+      let history: HistoryEntry[]
+      if (
+        key &&
+        last &&
+        last.key === key &&
+        now - last.timestamp < MERGE_WINDOW_MS
+      ) {
+        // Merge: keep the older snapshot (the "true before"), just bump the
+        // timestamp so subsequent calls keep merging.
+        history = state.history.slice()
+        history[history.length - 1] = { ...last, timestamp: now }
+      } else {
+        history = [
+          ...state.history,
+          { snapshot: beforeSnapshot, key, timestamp: now },
+        ]
+        if (history.length > HISTORY_LIMIT) history.shift()
+      }
+      return { ...result, history, future: [] }
+    })
+  }
+
+  return {
   project: null,
   selectedIdxs: [],
+  history: [],
+  future: [],
   assetDetailId: null,
   dummy: defaultDummyN(defaultDummy()),
   error: null,
@@ -161,15 +241,76 @@ export const useEditor = create<EditorState>((set, get) => ({
       selectedIdxs: [],
       assetDetailId: null,
       error: null,
+      // A new project has no meaningful history relative to its predecessor.
+      history: [],
+      future: [],
     }),
 
   setProject: (project) =>
-    set({ project, selectedIdxs: [], assetDetailId: null, error: null }),
+    set({
+      project,
+      selectedIdxs: [],
+      assetDetailId: null,
+      error: null,
+      history: [],
+      future: [],
+    }),
 
   clearProject: () =>
-    set({ project: null, selectedIdxs: [], assetDetailId: null, error: null }),
+    set({
+      project: null,
+      selectedIdxs: [],
+      assetDetailId: null,
+      error: null,
+      history: [],
+      future: [],
+    }),
 
   setError: (msg) => set({ error: msg }),
+
+  undo: () =>
+    set((state) => {
+      if (state.history.length === 0 || !state.project) return state
+      const history = state.history.slice()
+      const entry = history.pop()!
+      const future: Snapshot[] = [
+        ...state.future,
+        { project: state.project, selectedIdxs: state.selectedIdxs },
+      ]
+      return {
+        project: entry.snapshot.project,
+        selectedIdxs: entry.snapshot.selectedIdxs,
+        history,
+        future,
+      }
+    }),
+
+  redo: () =>
+    set((state) => {
+      if (state.future.length === 0 || !state.project) return state
+      const future = state.future.slice()
+      const next = future.pop()!
+      // Push the current state back onto history so a subsequent undo
+      // re-undoes the redo. Use a sentinel key so nothing merges with it.
+      const history: HistoryEntry[] = [
+        ...state.history,
+        {
+          snapshot: {
+            project: state.project,
+            selectedIdxs: state.selectedIdxs,
+          },
+          key: '__redo__',
+          timestamp: Date.now(),
+        },
+      ]
+      if (history.length > HISTORY_LIMIT) history.shift()
+      return {
+        project: next.project,
+        selectedIdxs: next.selectedIdxs,
+        history,
+        future,
+      }
+    }),
 
   openAssetDetail: (setId) => set({ assetDetailId: setId }),
   closeAssetDetail: () => set({ assetDetailId: null }),
@@ -209,18 +350,18 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   setLayerPosition: (idx, x, y) =>
-    set((state) => {
-      if (!state.project) return state
-      return { project: setLayerXY(state.project, idx, x, y) }
-    }),
+    mutate(
+      (state) => {
+        if (!state.project) return state
+        return { project: setLayerXY(state.project, idx, x, y) }
+      },
+      `move:${idx}`,
+    ),
 
   reorderLayer: (idx, direction) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project) return state
       const next = reorderLayer(state.project, idx, direction)
-      // Move the selection index in lockstep with the reorder so the user's
-      // selection stays on the same layer after it shifts in the array.
-      // Preserve insertion order — don't sort.
       const target = direction === 'up' ? idx + 1 : idx - 1
       const selectedIdxs = state.selectedIdxs.map((s) =>
         s === idx ? target : s === target ? idx : s,
@@ -229,7 +370,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   deleteLayer: (idx) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project) return state
       const next = deleteLayer(state.project, idx)
       const selectedIdxs = state.selectedIdxs
@@ -239,14 +380,15 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   replaceAssetAction: (ref, bitmap, opts) => {
-    const project = get().project
-    if (!project) return 'No project loaded.'
+    const state = get()
+    if (!state.project) return 'No project loaded.'
     try {
-      const next = replaceAsset(project, ref, bitmap, {
+      const next = replaceAsset(state.project, ref, bitmap, {
         requireDimMatch: opts?.requireDimMatch ?? true,
         clearOtherSlots: opts?.clearOtherSlots,
       })
-      set({ project: next })
+      // Use mutate so this counts as one undoable step.
+      mutate(() => ({ project: next }))
       return null
     } catch (err) {
       return errMsg(err)
@@ -254,7 +396,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   insertTypeC: (type, bitmap) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
         const next = insertTypeCLayer(state.project, type, { bitmaps: [bitmap] })
@@ -269,7 +411,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   insertTypeCEmpty: (type) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
         const next = insertTypeCLayer(state.project, type)
@@ -284,7 +426,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   insertTypeCShared: (type, assetSetId, position) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
         const next = insertTypeCLayer(state.project, type, {
@@ -302,7 +444,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   createAssetSetAction: (type, bitmaps) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
         const { project: next } = createTypeCAssetSet(state.project, type, {
@@ -315,13 +457,16 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   renameAssetSetAction: (setId, name) =>
-    set((state) => {
-      if (!state.project || state.project.format !== 'typeC') return state
-      return { project: renameAssetSet(state.project, setId, name) }
-    }),
+    mutate(
+      (state) => {
+        if (!state.project || state.project.format !== 'typeC') return state
+        return { project: renameAssetSet(state.project, setId, name) }
+      },
+      `rename:${setId}`,
+    ),
 
   deleteAssetSetAction: (setId) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
         return {
@@ -338,7 +483,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   rebindLayerAction: (layerIdx, newSetId) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
         return {
@@ -351,13 +496,13 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   detachLayerAction: (layerIdx) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       return { project: detachLayerFromSharedSet(state.project, layerIdx) }
     }),
 
   regenerateAssetSetFromFont: (setId, bitmaps) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
         return {
@@ -370,7 +515,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   insertFaceN: (kind, bitmaps) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'faceN') return state
       try {
         const next = insertFaceNLayer(state.project, kind, bitmaps)
@@ -385,7 +530,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   insertFaceNDigitSetAction: (digits, chain) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'faceN') return state
       try {
         const { project: withSet, setIdx } = insertFaceNDigitSet(
@@ -413,7 +558,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   insertFaceNDigitElementAction: (kind, digitSetIdx, position, align) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'faceN') return state
       try {
         const next = insertFaceNDigitElement(
@@ -434,7 +579,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   regenerateFaceNDigitSetFromFont: (setIdx, digits) =>
-    set((state) => {
+    mutate((state) => {
       if (!state.project || state.project.format !== 'faceN') return state
       try {
         const next = regenerateFaceNDigitSet(state.project, setIdx, digits)
@@ -445,16 +590,22 @@ export const useEditor = create<EditorState>((set, get) => ({
     }),
 
   patchLayer: (idx, patch) =>
-    set((state) => {
-      if (!state.project || state.project.format !== 'typeC') return state
-      return { project: patchTypeCLayer(state.project, idx, patch) }
-    }),
+    mutate(
+      (state) => {
+        if (!state.project || state.project.format !== 'typeC') return state
+        return { project: patchTypeCLayer(state.project, idx, patch) }
+      },
+      `patchLayer:${idx}`,
+    ),
 
   patchElement: (idx, patch) =>
-    set((state) => {
-      if (!state.project || state.project.format !== 'faceN') return state
-      return { project: patchFaceNElement(state.project, idx, patch) }
-    }),
+    mutate(
+      (state) => {
+        if (!state.project || state.project.format !== 'faceN') return state
+        return { project: patchFaceNElement(state.project, idx, patch) }
+      },
+      `patchElement:${idx}`,
+    ),
 
   patchDummy: (key, value) =>
     set((state) => ({ dummy: { ...state.dummy, [key]: value } })),
@@ -462,8 +613,12 @@ export const useEditor = create<EditorState>((set, get) => ({
   resetDummy: () => set({ dummy: defaultDummyN(defaultDummy()) }),
 
   setFaceNumber: (n) =>
-    set((state) => {
-      if (!state.project || state.project.format !== 'typeC') return state
-      return { project: { ...state.project, faceNumber: n } }
-    }),
-}))
+    mutate(
+      (state) => {
+        if (!state.project || state.project.format !== 'typeC') return state
+        return { project: { ...state.project, faceNumber: n } }
+      },
+      'faceNumber',
+    ),
+  }
+})

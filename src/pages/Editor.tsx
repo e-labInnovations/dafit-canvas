@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Binary,
@@ -7,6 +7,8 @@ import {
   FilePlus2,
   FolderOpen,
   Package,
+  Redo2,
+  Undo2,
   X,
 } from "lucide-react";
 import EditorCanvas from "../components/editor/EditorCanvas";
@@ -46,11 +48,46 @@ function Editor() {
   const newProject = useEditor((s) => s.newProject);
   const setProject = useEditor((s) => s.setProject);
   const setError = useEditor((s) => s.setError);
+  const undo = useEditor((s) => s.undo);
+  const redo = useEditor((s) => s.redo);
+  const canUndo = useEditor((s) => s.history.length > 0);
+  const canRedo = useEditor((s) => s.future.length > 0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showNewMenu, setShowNewMenu] = useState(false);
   const [importing, setImporting] = useState(false);
   const [uploadBytes, setUploadBytes] = useState<Uint8Array | null>(null);
+
+  // Global Cmd/Ctrl-Z (and Shift-variant / Ctrl-Y) — wired at the page
+  // level so the shortcut fires even when focus is on the canvas. We bail
+  // out when the user is typing in a text field so native input undo still
+  // works inside name/number fields.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.metaKey && !e.ctrlKey) return;
+      const t = e.target as HTMLElement | null;
+      if (
+        t instanceof HTMLInputElement ||
+        t instanceof HTMLTextAreaElement ||
+        (t && t.isContentEditable)
+      ) {
+        return;
+      }
+      const k = e.key.toLowerCase();
+      if (k === "z" && e.shiftKey) {
+        e.preventDefault();
+        redo();
+      } else if (k === "z") {
+        e.preventDefault();
+        undo();
+      } else if (k === "y") {
+        e.preventDefault();
+        redo();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
 
   // Live projected .bin size for the editor header chip. The pack runs on
   // every project mutation, so we defer the computation — during a drag,
@@ -152,6 +189,32 @@ function Editor() {
           )}
         </div>
         <div className="editor-toolbar">
+          <div
+            className="editor-undo-group"
+            role="group"
+            aria-label="Undo / redo"
+          >
+            <button
+              type="button"
+              className="counter ghost"
+              onClick={undo}
+              disabled={!canUndo}
+              title="Undo (Cmd/Ctrl+Z)"
+              aria-label="Undo"
+            >
+              <Undo2 size={14} aria-hidden />
+            </button>
+            <button
+              type="button"
+              className="counter ghost"
+              onClick={redo}
+              disabled={!canRedo}
+              title="Redo (Cmd/Ctrl+Shift+Z)"
+              aria-label="Redo"
+            >
+              <Redo2 size={14} aria-hidden />
+            </button>
+          </div>
           <div className="editor-new-wrap">
             <button
               type="button"

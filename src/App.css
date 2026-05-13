@@ -1135,11 +1135,25 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  align-items: center;
 
   .counter {
     margin-bottom: 0;
     padding: 5px 12px;
     font-size: 14px;
+  }
+
+  /* Undo/redo sit as a paired icon group — same visual weight as the
+   * other toolbar buttons but tighter together, and the icon-only shape
+   * (square padding) makes the pair feel like one control. */
+  .editor-undo-group {
+    display: inline-flex;
+    gap: 2px;
+    margin-right: 4px;
+
+    .counter {
+      padding: 5px 8px;
+    }
   }
 
   @media (max-width: 1024px) {
