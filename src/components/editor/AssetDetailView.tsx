@@ -1,11 +1,20 @@
 import { useState } from 'react'
-import { AlertTriangle, ArrowLeft, Trash2, Type, Upload, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Pencil,
+  Trash2,
+  Type,
+  Upload,
+  X,
+} from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
 import {
   TYPEC_FONT_INSERTABLE,
   consumersOf,
   decodeBmpFile,
 } from '../../lib/projectIO'
+import BmpPixelEditor from './BmpPixelEditor'
 import FontGenerator, { type FontTarget } from './FontGenerator'
 import type { AssetSet, AssetSlot } from '../../types/face'
 
@@ -57,6 +66,39 @@ function SlotRow({
   const replace = useEditor((s) => s.replaceAssetAction)
   const url = rgbaToDataUrl(slot.rgba, width, height)
   const isEmpty = width === 0 || height === 0 || !slot.rgba
+  const [editorOpen, setEditorOpen] = useState(false)
+
+  /** Shared by the file-picker and the BMP editor — applies the new pixels
+   *  to the slot with the right size-handling policy:
+   *    - empty set or count=1 → adopt new dims silently
+   *    - multi-slot, dim mismatch → confirm + clear siblings
+   *    - otherwise → strict dim match (the same-size happy path) */
+  const commitBitmap = (bmp: {
+    width: number
+    height: number
+    rgba: Uint8ClampedArray
+  }) => {
+    const dimsDiffer =
+      !isEmpty && (bmp.width !== width || bmp.height !== height)
+    let opts: { requireDimMatch?: boolean; clearOtherSlots?: boolean }
+    if (isEmpty || setCount === 1) {
+      opts = { requireDimMatch: false }
+    } else if (dimsDiffer) {
+      const others = setCount - 1
+      const ok = window.confirm(
+        `The new image is ${bmp.width}×${bmp.height} but "${setName}" is ${width}×${height}.\n\n` +
+          `Resize the whole set to ${bmp.width}×${bmp.height}? ` +
+          `The other ${others} slot${others === 1 ? '' : 's'} will be cleared ` +
+          `(pixel art doesn't scale cleanly, so they'd render wrong otherwise).`,
+      )
+      if (!ok) return
+      opts = { requireDimMatch: false, clearOtherSlots: true }
+    } else {
+      opts = { requireDimMatch: true }
+    }
+    const err = replace({ tag: 'typeC-slot', setId, slotIdx }, bmp, opts)
+    if (err) onError(err)
+  }
 
   const onPick = async () => {
     const input = document.createElement('input')
@@ -67,39 +109,16 @@ function SlotRow({
       if (!file) return
       try {
         const bmp = await decodeBmpFile(file)
-        const dimsDiffer =
-          !isEmpty && (bmp.width !== width || bmp.height !== height)
-
-        // Single-slot or empty set: adopt the new dims silently.
-        // Multi-slot non-empty with new dims: confirm and clear siblings.
-        let opts: { requireDimMatch?: boolean; clearOtherSlots?: boolean }
-        if (isEmpty || setCount === 1) {
-          opts = { requireDimMatch: false }
-        } else if (dimsDiffer) {
-          const others = setCount - 1
-          const ok = window.confirm(
-            `The selected BMP is ${bmp.width}×${bmp.height} but "${setName}" is ${width}×${height}.\n\n` +
-              `Resize the whole set to ${bmp.width}×${bmp.height}? ` +
-              `The other ${others} slot${others === 1 ? '' : 's'} will be cleared ` +
-              `(pixel art doesn't scale cleanly, so they'd render wrong otherwise).`,
-          )
-          if (!ok) return
-          opts = { requireDimMatch: false, clearOtherSlots: true }
-        } else {
-          opts = { requireDimMatch: true }
-        }
-
-        const err = replace(
-          { tag: 'typeC-slot', setId, slotIdx },
-          bmp,
-          opts,
-        )
-        if (err) onError(err)
+        commitBitmap(bmp)
       } catch (err) {
         onError(err instanceof Error ? err.message : String(err))
       }
     }
     input.click()
+  }
+
+  const onEdit = () => {
+    setEditorOpen(true)
   }
 
   return (
@@ -112,21 +131,46 @@ function SlotRow({
         )}
       </div>
       <code className="asset-detail-slot-label">{slotIdx}</code>
-      <button
-        type="button"
-        className="icon-btn"
-        title={
-          isEmpty
-            ? 'Set BMP'
-            : setCount === 1
-              ? 'Replace BMP (any size)'
-              : `Replace BMP (${width}×${height}, or resize the whole set)`
-        }
-        aria-label={isEmpty ? 'Set BMP' : 'Replace BMP'}
-        onClick={onPick}
-      >
-        <Upload size={12} />
-      </button>
+      <div className="asset-detail-slot-actions">
+        <button
+          type="button"
+          className="icon-btn"
+          title="Edit BMP (crop, draw, filters, resize)"
+          aria-label="Edit BMP"
+          onClick={onEdit}
+        >
+          <Pencil size={12} />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title={
+            isEmpty
+              ? 'Set BMP from file'
+              : setCount === 1
+                ? 'Replace from file (any size)'
+                : `Replace from file (${width}×${height}, or resize the whole set)`
+          }
+          aria-label={isEmpty ? 'Set BMP from file' : 'Replace BMP from file'}
+          onClick={onPick}
+        >
+          <Upload size={12} />
+        </button>
+      </div>
+
+      {editorOpen && (
+        <BmpPixelEditor
+          rgba={slot.rgba}
+          width={width > 0 ? width : 32}
+          height={height > 0 ? height : 32}
+          name={`${setName} · slot ${slotIdx}`}
+          onSave={(rgba, w, h) => {
+            commitBitmap({ width: w, height: h, rgba })
+            setEditorOpen(false)
+          }}
+          onClose={() => setEditorOpen(false)}
+        />
+      )}
     </li>
   )
 }
