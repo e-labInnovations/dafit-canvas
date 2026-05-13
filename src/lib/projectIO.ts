@@ -160,9 +160,49 @@ export const materializeTypeC = (project: TypeCProject): Materialized => {
   const blobs: DecodedBlob[] = []
   let cursor = 0
 
-  const consumed = project.assetSets.filter((set) =>
+  // Consumed = sets referenced by at least one layer. Orphans skip the .bin
+  // entirely (see ZIP side-file path).
+  const consumedRaw = project.assetSets.filter((set) =>
     project.layers.some((l) => l.assetSetId === set.id),
   )
+
+  // Blob-order matters for firmware compatibility. Comparing the user's
+  // broken My-Blue.bin against the working `new (1).bin` showed identical
+  // FaceData but completely different blob layouts — and the working file
+  // clusters all count-11 progress bars (HR/KCAL/STEPS_PROGBAR) at idx 0–32.
+  // The editor's old order ("walk assetSets in insertion order") scattered
+  // them across the file (idx 0, 64, 86), which left STEPS/KCAL_PROGBAR stuck
+  // on frame 0 on the watch.
+  //
+  // Sort priority that matches the reference's pattern:
+  //   1. PROGBAR types first (0x70 STEPS_PROGBAR, 0x80 HR_PROGBAR,
+  //      0x90 KCAL_PROGBAR, 0xa0 DIST_PROGBAR) — these are the "showing wrong
+  //      frame" candidates, and the reference always places them at low idx.
+  //   2. Then sets with count ≥ 2 (digit sets, name strings) by descending
+  //      count so count-12 MONTH_NAME and count-10 digit sets cluster.
+  //   3. Single-blob items (SEPs, hands, logos, count = 1) last.
+  // Original asset-library order breaks ties so the user's "first/second TIME
+  // set" choice is preserved when two sets have the same priority + count.
+  const PROGBAR_TYPES = new Set([0x70, 0x80, 0x90, 0xa0])
+  const firstConsumerType = (setId: string): number | null =>
+    project.layers.find((l) => l.assetSetId === setId)?.type ?? null
+  const categoryFor = (count: number, type: number | null): number => {
+    if (type !== null && PROGBAR_TYPES.has(type)) return 0
+    if (count > 1) return 1
+    return 2
+  }
+  const consumed = [...consumedRaw]
+    .map((set, originalIdx) => ({
+      set,
+      originalIdx,
+      category: categoryFor(set.count, firstConsumerType(set.id)),
+    }))
+    .sort((a, b) => {
+      if (a.category !== b.category) return a.category - b.category
+      if (a.set.count !== b.set.count) return b.set.count - a.set.count
+      return a.originalIdx - b.originalIdx
+    })
+    .map((e) => e.set)
 
   for (const set of consumed) {
     setStartIdx.set(set.id, cursor)
@@ -180,7 +220,10 @@ export const materializeTypeC = (project: TypeCProject): Materialized => {
         typeName: tName,
         width: set.width,
         height: set.height,
-        compression: 'RLE_LINE',
+        // Round-trip the encoding the slot was imported with. Falls back to
+        // RLE_LINE for freshly-created slots; packTypeC's raw-fallback still
+        // applies when RLE wouldn't shrink the blob.
+        compression: slot?.compression ?? 'RLE_LINE',
         rawSize: set.width * set.height * 2,
         rgba,
         raw: new Uint8Array(0),
@@ -252,7 +295,13 @@ const decodeTypeCBin = (data: Uint8Array, fileName: string): TypeCProject => {
       const h = firstBlob?.height ?? fd.h
       for (let j = 0; j < count; j++) {
         const blob = blobs[fd.idx + j]
-        slots.push({ rgba: blob?.rgba ?? null })
+        // Preserve the per-slot compression observed in the source .bin so
+        // round-tripping doesn't silently switch RLE→raw or vice versa.
+        // The firmware doesn't always tolerate that swap (see AssetSlot doc).
+        slots.push({
+          rgba: blob?.rgba ?? null,
+          compression: blob?.compression,
+        })
       }
       groupForKey.set(key, {
         id: nextId('asset'),
@@ -439,6 +488,11 @@ type ProjectJsonV1 = {
     /** Filename per slot. Consumed slots map to `dbNNN.bmp`; orphans map to
      *  `orphan_<setId>_<slotIdx>.bmp`. null means empty/no bitmap. */
     slotFiles: (string | null)[]
+    /** Per-slot blob encoding observed at import time. Preserved across the
+     *  ZIP round-trip so re-export emits the firmware-correct compression
+     *  (some MoYoung firmwares mis-decode RLE for certain blobs). Undefined
+     *  entries fall back to the encoder default. */
+    slotCompressions?: ('RLE_LINE' | 'NONE' | null)[]
   }[]
 }
 
@@ -492,6 +546,9 @@ export const exportTypeCZip = async (project: TypeCProject): Promise<Blob> => {
         if (start !== undefined) return `${padIdx(start + i)}.bmp`
         return orphanSlotName(set.id, i)
       })
+      const slotCompressions = set.slots.map(
+        (slot): 'RLE_LINE' | 'NONE' | null => slot.compression ?? null,
+      )
       return {
         id: set.id,
         name: set.name,
@@ -500,6 +557,7 @@ export const exportTypeCZip = async (project: TypeCProject): Promise<Blob> => {
         count: set.count,
         kind: set.kind,
         slotFiles,
+        slotCompressions,
       }
     }),
   }
@@ -533,21 +591,28 @@ const restoreFromProjectJson = async (
     const slots: AssetSlot[] = []
     for (let i = 0; i < setJson.count; i++) {
       const fn = setJson.slotFiles[i]
+      // Restore per-slot compression hint when the side-file carried one
+      // (older project.json files won't, hence the optional field).
+      const compressionRaw = setJson.slotCompressions?.[i] ?? null
+      const compression: 'RLE_LINE' | 'NONE' | undefined =
+        compressionRaw === 'RLE_LINE' || compressionRaw === 'NONE'
+          ? compressionRaw
+          : undefined
       if (!fn) {
-        slots.push({ rgba: null })
+        slots.push({ rgba: null, compression })
         continue
       }
       const file = zip.file(fn)
       if (!file) {
-        slots.push({ rgba: null })
+        slots.push({ rgba: null, compression })
         continue
       }
       try {
         const bytes = await file.async('uint8array')
         const bmp = decodeBmp(bytes)
-        slots.push({ rgba: bmp.rgba })
+        slots.push({ rgba: bmp.rgba, compression })
       } catch {
-        slots.push({ rgba: null })
+        slots.push({ rgba: null, compression })
       }
     }
     assetSets.push({
@@ -1124,7 +1189,9 @@ export const replaceAsset = (
       requireMatch({ width: set.width, height: set.height }, bitmap, `slot ${ref.slotIdx}`)
     }
     const slots = set.slots.map((s, i) =>
-      i === ref.slotIdx ? { rgba: bitmap.rgba } : s,
+      // Keep the imported-from-bin compression hint when only the pixels are
+      // being replaced — same firmware-round-trip concern as elsewhere.
+      i === ref.slotIdx ? { ...s, rgba: bitmap.rgba } : s,
     )
     const assetSets = project.assetSets.map((s) =>
       s.id === ref.setId

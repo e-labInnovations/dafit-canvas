@@ -24,9 +24,17 @@ export type AssetSetKind =
 
 /** One slot in an AssetSet — a pixel buffer with metadata. Width/height are
  *  uniform across the whole set (`AssetSet.width`/`height`); this struct only
- *  carries the per-slot pixels. `null` rgba means "placeholder/empty". */
+ *  carries the per-slot pixels. `null` rgba means "placeholder/empty".
+ *
+ *  `compression` captures how the blob was encoded in the *source* .bin (when
+ *  the project was imported) so re-export can faithfully reproduce it. Some
+ *  MoYoung firmwares mis-decode RLE_LINE for certain blob types — those
+ *  layers ship as `NONE` (uncompressed RGB565) in the wild, and changing the
+ *  encoding on round-trip breaks rendering. Undefined falls back to the
+ *  encoder's default ("RLE_LINE, but raw if RLE doesn't shrink"). */
 export type AssetSlot = {
   rgba: Uint8ClampedArray | null
+  compression?: 'RLE_LINE' | 'NONE'
 }
 
 /** A reusable, named collection of N same-sized bitmaps. Multiple layers can
