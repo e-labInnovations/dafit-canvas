@@ -2,11 +2,116 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+
+    <!-- Primary meta -->
+    <title>DaFit Canvas — Smartwatch Face Editor for Da Fit / MoYoung</title>
+    <meta
+      name="description"
+      content="Browser-based visual editor for Da Fit / MoYoung Type C smartwatch faces. Import .bin files, edit layers, regenerate digits from any font, and flash to your watch over Web Bluetooth — all offline, all in your browser."
+    />
+    <meta
+      name="keywords"
+      content="Da Fit, MoYoung, smartwatch, watch face editor, watchface, Type C, RGB565, 240x240, dawft, dawfu, BLE upload, Web Bluetooth, Porodo Vortex, MOY-GKE5"
+    />
+    <meta name="author" content="Mohammed Ashad" />
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#aa3bff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0d0a16" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+
+    <!-- Canonical -->
+    <link rel="canonical" href="https://github.com/e-labInnovations/DaFit-Canvas" />
+
+    <!-- Icons -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>dafit-canvas</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="mask-icon" href="/favicon.svg" color="#aa3bff" />
+
+    <!-- PWA manifest -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="DaFit Canvas" />
+    <meta property="og:title" content="DaFit Canvas — Smartwatch Face Editor" />
+    <meta
+      property="og:description"
+      content="Design and flash Da Fit / MoYoung smartwatch faces in your browser. Visual layer editor, font-to-digit generation, Web Bluetooth upload — offline-first."
+    />
+    <meta property="og:url" content="https://github.com/e-labInnovations/DaFit-Canvas" />
+    <meta property="og:image" content="/og-image.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="DaFit Canvas — smartwatch face editor" />
+    <meta property="og:locale" content="en_US" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="DaFit Canvas — Smartwatch Face Editor" />
+    <meta
+      name="twitter:description"
+      content="Design and flash Da Fit / MoYoung smartwatch faces in your browser."
+    />
+    <meta name="twitter:image" content="/og-image.png" />
+    <meta name="twitter:image:alt" content="DaFit Canvas — smartwatch face editor" />
+
+    <!-- Structured data: SoftwareApplication -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "DaFit Canvas",
+        "applicationCategory": "DesignApplication",
+        "operatingSystem": "Web Browser",
+        "description": "Browser-based visual editor for Da Fit / MoYoung Type C smartwatch faces. Import .bin files, edit layers, regenerate digits from any font, and flash to a watch over Web Bluetooth.",
+        "url": "https://github.com/e-labInnovations/DaFit-Canvas",
+        "image": "/og-image.png",
+        "author": {
+          "@type": "Person",
+          "name": "Mohammed Ashad",
+          "url": "https://github.com/e-labInnovations"
+        },
+        "license": "https://opensource.org/licenses/MIT",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "featureList": [
+          "Import and decode Type C .bin watch faces",
+          "Layer-based visual editor on a 240×240 canvas",
+          "Shared asset library across layers",
+          "Font-to-digit glyph generation",
+          "Per-blob RLE vs raw compression preserved on round-trip",
+          "MoYoung face browser",
+          "Web Bluetooth upload to the watch"
+        ]
+      }
+    </script>
   </head>
   <body>
+    <noscript>
+      <h1>DaFit Canvas</h1>
+      <p>
+        DaFit Canvas is a browser-based visual editor for designing
+        smartwatch faces compatible with the Da Fit / MoYoung ecosystem.
+        Import an existing Type C <code>.bin</code>, swap assets, retouch
+        positions, regenerate digits from a font, and export a watch-ready
+        binary — without ever touching a hex editor.
+      </p>
+      <p>
+        This application requires JavaScript to run. Please enable
+        JavaScript in your browser. Source code and documentation are
+        available at
+        <a href="https://github.com/e-labInnovations/DaFit-Canvas">
+          github.com/e-labInnovations/DaFit-Canvas
+        </a>.
+      </p>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

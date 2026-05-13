@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="DaFit Canvas — smartwatch face editor">
+  <title>DaFit Canvas — smartwatch face editor</title>
+  <defs>
+    <linearGradient id="og-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1230"/>
+      <stop offset="100%" stop-color="#0d0a16"/>
+    </linearGradient>
+    <radialGradient id="og-glow" cx="30%" cy="30%" r="60%">
+      <stop offset="0%" stop-color="#aa3bff" stop-opacity="0.35"/>
+      <stop offset="100%" stop-color="#aa3bff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="og-case" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#c084fc"/>
+      <stop offset="100%" stop-color="#aa3bff"/>
+    </linearGradient>
+    <radialGradient id="og-screen" cx="50%" cy="42%" r="65%">
+      <stop offset="0%" stop-color="#221a36"/>
+      <stop offset="100%" stop-color="#0d0a16"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#og-bg)"/>
+  <rect width="1200" height="630" fill="url(#og-glow)"/>
+
+  <!-- Subtle grid pattern (pixel canvas hint) -->
+  <g stroke="#ffffff" stroke-opacity="0.04" stroke-width="1">
+    <line x1="0" y1="78"  x2="1200" y2="78"/>
+    <line x1="0" y1="156" x2="1200" y2="156"/>
+    <line x1="0" y1="234" x2="1200" y2="234"/>
+    <line x1="0" y1="312" x2="1200" y2="312"/>
+    <line x1="0" y1="390" x2="1200" y2="390"/>
+    <line x1="0" y1="468" x2="1200" y2="468"/>
+    <line x1="0" y1="546" x2="1200" y2="546"/>
+    <line x1="120"  y1="0" x2="120"  y2="630"/>
+    <line x1="240"  y1="0" x2="240"  y2="630"/>
+    <line x1="360"  y1="0" x2="360"  y2="630"/>
+    <line x1="480"  y1="0" x2="480"  y2="630"/>
+    <line x1="600"  y1="0" x2="600"  y2="630"/>
+    <line x1="720"  y1="0" x2="720"  y2="630"/>
+    <line x1="840"  y1="0" x2="840"  y2="630"/>
+    <line x1="960"  y1="0" x2="960"  y2="630"/>
+    <line x1="1080" y1="0" x2="1080" y2="630"/>
+  </g>
+
+  <!-- Logo mark (scaled 4× from 64-unit base, centered around 240,315) -->
+  <g transform="translate(96, 187) scale(4)">
+    <path fill="url(#og-case)"
+          d="M48 36h-1v-8h1a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2z"/>
+    <path fill="url(#og-case)"
+          d="M42 20H20l2.621-10.485A2 2 0 0 1 24.562 8h12.876a2 2 0 0 1 1.941 1.515zM39.379 54.485A2 2 0 0 1 37.438 56H24.562a2 2 0 0 1-1.941-1.515L20 44h22z"/>
+    <circle cx="31" cy="32" r="17" fill="url(#og-case)"/>
+    <circle cx="31" cy="32" r="15.5" fill="#1a1230"/>
+    <circle cx="31" cy="32" r="14" fill="url(#og-screen)"/>
+    <rect x="25.5" y="26.5" width="5" height="5" rx="0.8" fill="#c084fc"/>
+    <rect x="31.5" y="26.5" width="5" height="5" rx="0.8" fill="#47bfff"/>
+    <rect x="25.5" y="32.5" width="5" height="5" rx="0.8" fill="#47bfff"/>
+    <rect x="31.5" y="32.5" width="5" height="5" rx="0.8" fill="#c084fc"/>
+  </g>
+
+  <!-- Wordmark + tagline -->
+  <g font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+    <text x="490" y="265" font-size="84" font-weight="700" fill="#f3f4f6">
+      DaFit <tspan fill="#c084fc">Canvas</tspan>
+    </text>
+    <text x="490" y="335" font-size="32" font-weight="500" fill="#9ca3af">
+      Smartwatch face editor for Da Fit / MoYoung
+    </text>
+    <text x="490" y="395" font-size="22" font-weight="400" fill="#6b6375">
+      Browser-based · Offline-first · No telemetry
+    </text>
+  </g>
+
+  <!-- Feature chips -->
+  <g font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="20" font-weight="500" fill="#c084fc">
+    <g>
+      <rect x="490" y="438" width="170" height="46" rx="23" fill="rgba(170,59,255,0.15)" stroke="rgba(170,59,255,0.45)" stroke-width="1.5"/>
+      <text x="575" y="468" text-anchor="middle">Visual editor</text>
+    </g>
+    <g>
+      <rect x="676" y="438" width="170" height="46" rx="23" fill="rgba(170,59,255,0.15)" stroke="rgba(170,59,255,0.45)" stroke-width="1.5"/>
+      <text x="761" y="468" text-anchor="middle">Font → digits</text>
+    </g>
+    <g>
+      <rect x="862" y="438" width="206" height="46" rx="23" fill="rgba(170,59,255,0.15)" stroke="rgba(170,59,255,0.45)" stroke-width="1.5"/>
+      <text x="965" y="468" text-anchor="middle">Bluetooth upload</text>
+    </g>
+  </g>
+
+  <!-- Footer URL -->
+  <text x="490" y="540" font-family="ui-monospace, Consolas, monospace" font-size="20" fill="#6b6375">
+    github.com/e-labInnovations/DaFit-Canvas
+  </text>
+</svg>
