@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
+import { useDeferredValue, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Binary,
+  Bluetooth,
   Download,
   FilePlus2,
   FolderOpen,
@@ -11,6 +12,7 @@ import {
 import EditorCanvas from "../components/editor/EditorCanvas";
 import LayerList from "../components/editor/LayerList";
 import PropertyPanel from "../components/editor/PropertyPanel";
+import UploadDialog from "../components/editor/UploadDialog";
 import { useEditor } from "../store/editorStore";
 import {
   downloadBlob,
@@ -19,6 +21,12 @@ import {
   importBin,
   importZip,
 } from "../lib/projectIO";
+import {
+  classifyFaceSize,
+  faceSizeHint,
+  faceSizeWarnSummary,
+  formatFaceSize,
+} from "../lib/faceSize";
 import type { EditorProject, WatchFormat } from "../types/face";
 
 const baseName = (
@@ -42,6 +50,20 @@ function Editor() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showNewMenu, setShowNewMenu] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [uploadBytes, setUploadBytes] = useState<Uint8Array | null>(null);
+
+  // Live projected .bin size for the editor header chip. The pack runs on
+  // every project mutation, so we defer the computation — during a drag,
+  // React keeps the previous size visible until the user lets go.
+  const deferredProject = useDeferredValue(project);
+  const projectedSize = useMemo(() => {
+    if (!deferredProject) return null;
+    try {
+      return exportBin(deferredProject).byteLength;
+    } catch {
+      return null;
+    }
+  }, [deferredProject]);
 
   const onNew = (format: WatchFormat) => {
     setShowNewMenu(false);
@@ -75,7 +97,23 @@ function Editor() {
     if (!project) return;
     try {
       const bytes = exportBin(project);
+      if (classifyFaceSize(bytes.byteLength) === "danger") {
+        const ok = window.confirm(
+          `${faceSizeWarnSummary(bytes.byteLength)}\n\nExport anyway?`,
+        );
+        if (!ok) return;
+      }
       downloadBlob(bytes, `${baseName(project)}.bin`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const onSendToWatch = () => {
+    if (!project) return;
+    try {
+      const bytes = exportBin(project);
+      setUploadBytes(bytes);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -101,6 +139,14 @@ function Editor() {
               <span className="format-badge">
                 {project.format === "typeC" ? "Type C" : "FaceN"}
               </span>
+              {projectedSize !== null && (
+                <span
+                  className={`face-size-chip face-size-${classifyFaceSize(projectedSize)}`}
+                  title={faceSizeHint(projectedSize)}
+                >
+                  {formatFaceSize(projectedSize)}
+                </span>
+              )}
               {project.fileName ? ` · ${project.fileName}` : " · untitled"}
             </span>
           )}
@@ -153,6 +199,16 @@ function Editor() {
             <Download size={14} aria-hidden />
             Export BIN
           </button>
+          <button
+            type="button"
+            className="counter"
+            onClick={onSendToWatch}
+            disabled={!project}
+            title="Pair watch over Bluetooth and flash this face directly"
+          >
+            <Bluetooth size={14} aria-hidden />
+            Send to watch
+          </button>
           <input
             ref={fileInputRef}
             type="file"
@@ -198,6 +254,14 @@ function Editor() {
           </div>
           <PropertyPanel />
         </div>
+      )}
+
+      {uploadBytes && (
+        <UploadDialog
+          onClose={() => setUploadBytes(null)}
+          bytes={uploadBytes}
+          filename={project ? `${baseName(project)}.bin` : 'face.bin'}
+        />
       )}
     </section>
   );

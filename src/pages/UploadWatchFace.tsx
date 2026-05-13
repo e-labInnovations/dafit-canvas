@@ -26,6 +26,12 @@ import {
   type FaceHeader,
 } from '../lib/dawft'
 import { detectFormat, parseFaceN, type FaceN } from '../lib/faceN'
+import {
+  classifyFaceSize,
+  faceSizeHint,
+  faceSizeWarnSummary,
+  formatFaceSize,
+} from '../lib/faceSize'
 import { defaultDummy } from '../lib/renderFace'
 import { defaultDummyN, type DummyStateN } from '../lib/renderFaceN'
 
@@ -104,6 +110,12 @@ function UploadWatchFace() {
   const handleUpload = async () => {
     const watch = watchRef.current
     if (!watch || !file) return
+    if (classifyFaceSize(file.size) === 'danger') {
+      const ok = window.confirm(
+        `${faceSizeWarnSummary(file.size)}\n\nFlash anyway?`,
+      )
+      if (!ok) return
+    }
     setError(null)
     setResult(null)
     setProgress(null)
@@ -232,12 +244,24 @@ function UploadWatchFace() {
             {file ? 'Replace file' : 'Choose file'}
           </span>
           <span className="file-picker-name">
-            {file ? `${file.name} (${formatBytes(file.size)})` : 'No file selected'}
+            {file ? (
+              <>
+                {file.name}{' '}
+                <span
+                  className={`face-size-chip face-size-${classifyFaceSize(file.size)}`}
+                  title={faceSizeHint(file.size)}
+                >
+                  {formatFaceSize(file.size)}
+                </span>
+              </>
+            ) : (
+              'No file selected'
+            )}
           </span>
         </label>
         <p className="hint">
-          Build the <code>.bin</code> with{' '}
-          <code>dawft create folder=&lt;extracted&gt; output.bin</code>.
+          Already designing a face? You can flash it straight from the{' '}
+          <strong>Editor</strong> — no need to download here first.
         </p>
 
         {parseError && (

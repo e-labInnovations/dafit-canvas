@@ -2565,6 +2565,127 @@
   font-weight: 500;
 }
 
+/* Projected/actual .bin size chip — colour-coded against corpus thresholds
+ * (warn ≥ 256 KB, danger ≥ 512 KB). See src/lib/faceSize.ts. */
+.face-size-chip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: help;
+  border: 1px solid transparent;
+}
+
+.face-size-ok {
+  background: var(--code-bg);
+  color: var(--text-h);
+  border-color: var(--border);
+}
+
+.face-size-warn {
+  background: rgba(255, 170, 50, 0.15);
+  border-color: rgba(255, 170, 50, 0.45);
+  color: #b07500;
+
+  @media (prefers-color-scheme: dark) {
+    color: #f5c970;
+    background: rgba(255, 200, 100, 0.12);
+    border-color: rgba(255, 200, 100, 0.35);
+  }
+}
+
+/* ---------- Editor upload modal ---------- */
+
+.modal.upload-modal {
+  flex-direction: column;
+  max-width: 540px;
+  width: 100%;
+  padding: 24px 28px;
+  gap: 0;
+
+  @media (max-width: 720px) {
+    padding: 20px;
+  }
+}
+
+.upload-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  text-align: left;
+
+  > .banner {
+    margin: 0;
+  }
+}
+
+.upload-modal-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  h2 {
+    margin: 0;
+    font-size: 22px;
+  }
+}
+
+.upload-modal-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+
+  code {
+    font-size: 12px;
+    padding: 2px 6px;
+  }
+}
+
+.upload-modal-step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  h3 {
+    margin: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .counter {
+    align-self: flex-start;
+    margin-bottom: 0;
+  }
+
+  .upload-progress-watch {
+    margin: 4px 0;
+  }
+}
+
+.face-size-danger {
+  background: rgba(220, 60, 60, 0.15);
+  border-color: rgba(220, 60, 60, 0.5);
+  color: #c0392b;
+
+  @media (prefers-color-scheme: dark) {
+    color: #ff8d85;
+    background: rgba(255, 110, 110, 0.12);
+    border-color: rgba(255, 110, 110, 0.4);
+  }
+}
+
 .digit-set {
   margin-bottom: 16px;
 
