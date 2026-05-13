@@ -33,9 +33,11 @@ const FACEN_DEPENDENT_KINDS: FaceNDigitDependentKind[] = [
 
 function LayerList() {
   const project = useEditor((s) => s.project)
-  const selectedIdx = useEditor((s) => s.selectedIdx)
+  const selectedIdxs = useEditor((s) => s.selectedIdxs)
   const assetDetailId = useEditor((s) => s.assetDetailId)
   const select = useEditor((s) => s.select)
+  const toggleSelected = useEditor((s) => s.toggleSelected)
+  const selectMany = useEditor((s) => s.selectMany)
   const reorder = useEditor((s) => s.reorderLayer)
   const remove = useEditor((s) => s.deleteLayer)
   const insertTypeC = useEditor((s) => s.insertTypeC)
@@ -307,17 +309,40 @@ function LayerList() {
         ) : (
           <ul className="layer-list">
             {[...layers].reverse().map((l) => {
-              const isSelected = l.index === selectedIdx
+              const isSelected = selectedIdxs.includes(l.index)
               // Visually flag every layer bound to the asset currently open in
               // the right sidebar — so the user can see all consumers at a
               // glance while editing a shared library.
               const isConsumer =
                 assetDetailId !== null && l.assetSetId === assetDetailId
+              const onRowClick = (e: React.MouseEvent) => {
+                // Cmd/Ctrl (+Meta) toggles a single layer. Shift extends the
+                // selection to a range from the current anchor (first-selected,
+                // i.e. selectedIdxs[0]) to this one. Plain click = single
+                // select. The anchor is kept at position 0 so it remains the
+                // "first selected" reference for align/distribute Relative-to.
+                if (e.metaKey || e.ctrlKey) {
+                  toggleSelected(l.index)
+                  return
+                }
+                if (e.shiftKey && selectedIdxs.length > 0) {
+                  const anchor = selectedIdxs[0]
+                  const [lo, hi] =
+                    anchor < l.index ? [anchor, l.index] : [l.index, anchor]
+                  const range: number[] = [anchor]
+                  for (let i = lo; i <= hi; i++) {
+                    if (i !== anchor) range.push(i)
+                  }
+                  selectMany(range, 'replace')
+                  return
+                }
+                select(l.index)
+              }
               return (
                 <li
                   key={l.index}
                   className={`layer-row ${isSelected ? 'selected' : ''} ${isConsumer ? 'consumer' : ''}`}
-                  onClick={() => select(l.index)}
+                  onClick={onRowClick}
                 >
                   <Layers size={14} aria-hidden />
                   <span className="layer-name" title={l.name}>

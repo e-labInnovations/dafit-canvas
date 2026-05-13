@@ -1358,6 +1358,91 @@
   border-radius: 1px;
 }
 
+/* Lasso/marquee rectangle drawn while the user drags from empty canvas
+ * pixels. Same coordinate space as the selection overlay so it lands on
+ * the rendered face — see EditorCanvas for the math. */
+.editor-marquee {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid var(--accent);
+  background: var(--accent-bg);
+  border-radius: 1px;
+}
+
+/* The pointer-event surface that wraps the FacePreview canvas. The frame
+ * itself (.face-preview-frame) is inside; we hang the cursor on this outer
+ * wrapper so it reads naturally over the canvas hardware-pixels. */
+.editor-canvas-frame {
+  position: relative;
+  cursor: default;
+  touch-action: none;
+}
+
+.editor-canvas-frame.is-grabbing,
+.editor-canvas-frame.is-grabbing * {
+  cursor: grabbing !important;
+}
+
+/* Alignment buttons in the PropertyPanel — six chips under the X/Y inputs.
+ * Mirrors `.prop-row` spacing but breaks into a horizontal cluster with a
+ * separator between the H- and V-axis groups. */
+.prop-alignment-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+
+  .icon-btn {
+    flex: 0 0 auto;
+  }
+}
+
+.prop-alignment-sep {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+/* "Relative to" picker — sits above the align/distribute rows and lets the
+ * user choose the reference rect (selection bounds, the canvas, or the
+ * first-selected layer). Matches the rest of PropertyPanel's input look. */
+.prop-relative {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+
+  > span {
+    font-family: var(--mono);
+    color: var(--text);
+    font-size: 11px;
+    text-transform: lowercase;
+    letter-spacing: 0.4px;
+    flex: 0 0 auto;
+  }
+
+  > select {
+    font: inherit;
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-h);
+    flex: 1 1 auto;
+    cursor: pointer;
+
+    &:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -1px;
+      border-color: transparent;
+    }
+  }
+}
+
 .prop-meta {
   margin: 0 0 12px;
   font-family: var(--mono);
@@ -2121,6 +2206,11 @@
   font-size: 13px;
   color: var(--text-h);
   border: 1px solid transparent;
+  /* Shift-click for range select would otherwise drag the browser's text
+   * selection across the row labels. The row is a click target, not text
+   * to copy — disable the native selection so multi-select feels clean. */
+  user-select: none;
+  -webkit-user-select: none;
 
   &:hover {
     background: var(--social-bg);

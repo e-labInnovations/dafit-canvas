@@ -1,10 +1,28 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import {
+  AlignCenterHorizontal,
+  AlignCenterVertical,
+  AlignEndHorizontal,
+  AlignEndVertical,
+  AlignStartHorizontal,
+  AlignStartVertical,
+  AlignHorizontalDistributeCenter,
+  AlignHorizontalSpaceBetween,
+  AlignVerticalDistributeCenter,
+  AlignVerticalSpaceBetween,
+} from "lucide-react";
 import { useEditor } from "../../store/editorStore";
-import { listLayers } from "../../lib/projectIO";
+import {
+  computeLayerBbox,
+  getLayerAnchor,
+  listLayers,
+} from "../../lib/projectIO";
 import { SCREEN_H, SCREEN_W } from "../../types/face";
 import AssetCard from "./AssetCard";
 import AssetDetailView from "./AssetDetailView";
 import type { FaceN } from "../../lib/faceN";
+import type { EditorProject } from "../../types/face";
+import type { DummyStateN } from "../../lib/renderFaceN";
 
 type FNEl = FaceN["elements"][number];
 
@@ -277,6 +295,117 @@ function FaceNFields({ idx, el }: { idx: number; el: FNEl }) {
   }
 }
 
+type AlignAxis = "left" | "centerH" | "right" | "top" | "centerV" | "bottom";
+
+/** Snap the layer to a canvas edge or centre. Uses the renderer-accurate
+ *  bbox (which expands for multi-digit types) so centring an aligned digit
+ *  set lands on the middle of all the digits, not just the first slot. */
+function AlignmentRow({ idx }: { idx: number }) {
+  const project = useEditor((s) => s.project);
+  const dummy = useEditor((s) => s.dummy);
+  const setLayerPosition = useEditor((s) => s.setLayerPosition);
+  if (!project) return null;
+
+  const bbox = computeLayerBbox(project, idx, dummy);
+  const anchorX =
+    project.format === "typeC" ? project.layers[idx]?.x : null;
+  const anchorY =
+    project.format === "typeC" ? project.layers[idx]?.y : null;
+  const disabled =
+    !bbox || anchorX === null || anchorX === undefined || anchorY === null || anchorY === undefined;
+
+  const align = (axis: AlignAxis) => {
+    if (!bbox || anchorX == null || anchorY == null) return;
+    // bbox.x is where the layer paints; layer.x is its anchor. For
+    // left-aligned layers they're equal, for centred/right multi-digit
+    // they differ. We move by the *delta* from current bbox to target so
+    // multi-digit alignment behaves correctly.
+    let nextX = anchorX;
+    let nextY = anchorY;
+    switch (axis) {
+      case "left":
+        nextX = anchorX + (0 - bbox.x);
+        break;
+      case "centerH":
+        nextX = anchorX + (Math.round((SCREEN_W - bbox.w) / 2) - bbox.x);
+        break;
+      case "right":
+        nextX = anchorX + (SCREEN_W - bbox.w - bbox.x);
+        break;
+      case "top":
+        nextY = anchorY + (0 - bbox.y);
+        break;
+      case "centerV":
+        nextY = anchorY + (Math.round((SCREEN_H - bbox.h) / 2) - bbox.y);
+        break;
+      case "bottom":
+        nextY = anchorY + (SCREEN_H - bbox.h - bbox.y);
+        break;
+    }
+    setLayerPosition(idx, nextX, nextY);
+  };
+
+  return (
+    <div className="prop-alignment-row" role="group" aria-label="Align layer">
+      <button
+        type="button"
+        className="icon-btn"
+        title="Align left (x = 0)"
+        onClick={() => align("left")}
+        disabled={disabled}
+      >
+        <AlignStartVertical size={14} aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        title="Centre horizontally"
+        onClick={() => align("centerH")}
+        disabled={disabled}
+      >
+        <AlignCenterVertical size={14} aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        title={`Align right (x = ${SCREEN_W} − width)`}
+        onClick={() => align("right")}
+        disabled={disabled}
+      >
+        <AlignEndVertical size={14} aria-hidden />
+      </button>
+      <span className="prop-alignment-sep" aria-hidden />
+      <button
+        type="button"
+        className="icon-btn"
+        title="Align top (y = 0)"
+        onClick={() => align("top")}
+        disabled={disabled}
+      >
+        <AlignStartHorizontal size={14} aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        title="Centre vertically"
+        onClick={() => align("centerV")}
+        disabled={disabled}
+      >
+        <AlignCenterHorizontal size={14} aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="icon-btn"
+        title={`Align bottom (y = ${SCREEN_H} − height)`}
+        onClick={() => align("bottom")}
+        disabled={disabled}
+      >
+        <AlignEndHorizontal size={14} aria-hidden />
+      </button>
+    </div>
+  );
+}
+
 function TypeCFields({ idx }: { idx: number }) {
   const project = useEditor((s) => s.project);
   const setLayerPosition = useEditor((s) => s.setLayerPosition);
@@ -302,6 +431,7 @@ function TypeCFields({ idx }: { idx: number }) {
           max={SCREEN_H * 2}
         />
       </div>
+      <AlignmentRow idx={idx} />
       <div className="prop-row">
         <NumField
           label="w"
@@ -320,15 +450,313 @@ function TypeCFields({ idx }: { idx: number }) {
   );
 }
 
+type MultiBbox = { idx: number; x: number; y: number; w: number; h: number };
+
+const collectMultiBboxes = (
+  project: EditorProject,
+  idxs: number[],
+  dummy: DummyStateN,
+): MultiBbox[] => {
+  const out: MultiBbox[] = [];
+  for (const idx of idxs) {
+    const bb = computeLayerBbox(project, idx, dummy);
+    if (bb) out.push({ idx, ...bb });
+  }
+  return out;
+};
+
+type RelativeTo = "selection" | "canvas" | "first";
+
+/** Arrange + distribute. `Relative to` picks the reference rect that
+ *  alignment targets snap to:
+ *    - selection: the union bounding rect of every selected layer (default)
+ *    - canvas:    the 240×240 watch face
+ *    - first:     the bbox of the first-selected layer (idxs[0])
+ *  Distribute is always relative to the selection's extremes — it doesn't
+ *  make sense against a fixed rect. */
+function MultiArrangeRow({ idxs }: { idxs: number[] }) {
+  const project = useEditor((s) => s.project);
+  const dummy = useEditor((s) => s.dummy);
+  const setLayerPosition = useEditor((s) => s.setLayerPosition);
+  const [relativeTo, setRelativeTo] = useState<RelativeTo>("selection");
+  if (!project) return null;
+
+  const bboxes = collectMultiBboxes(project, idxs, dummy);
+
+  // Reference rect varies by mode. Computed up-front so the alignment
+  // closures below stay one-liners.
+  let refRect: { x: number; y: number; w: number; h: number } | null = null;
+  if (bboxes.length > 0) {
+    if (relativeTo === "canvas") {
+      refRect = { x: 0, y: 0, w: SCREEN_W, h: SCREEN_H };
+    } else if (relativeTo === "first") {
+      // idxs[0] is the anchor (first-selected). Find its bbox in the
+      // computed list — falls back to selection if it has no bbox.
+      const firstBb = bboxes.find((b) => b.idx === idxs[0]);
+      refRect = firstBb
+        ? { x: firstBb.x, y: firstBb.y, w: firstBb.w, h: firstBb.h }
+        : null;
+    }
+    if (!refRect) {
+      const minX = Math.min(...bboxes.map((b) => b.x));
+      const minY = Math.min(...bboxes.map((b) => b.y));
+      const maxX = Math.max(...bboxes.map((b) => b.x + b.w));
+      const maxY = Math.max(...bboxes.map((b) => b.y + b.h));
+      refRect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+    }
+  }
+  const minX = refRect?.x ?? 0;
+  const minY = refRect?.y ?? 0;
+  const maxX = (refRect?.x ?? 0) + (refRect?.w ?? 0);
+  const maxY = (refRect?.y ?? 0) + (refRect?.h ?? 0);
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+
+  const moveTo = (newX: number, newY: number, bb: MultiBbox) => {
+    const anchor = getLayerAnchor(project, bb.idx);
+    if (!anchor) return;
+    // The anchor (layer.x/y) and the bbox.x/y can differ for centred or
+    // right-aligned multi-digit Type C layers, so move by delta.
+    setLayerPosition(
+      bb.idx,
+      anchor.x + Math.round(newX - bb.x),
+      anchor.y + Math.round(newY - bb.y),
+    );
+  };
+
+  const alignL = () => bboxes.forEach((bb) => moveTo(minX, bb.y, bb));
+  const alignCH = () =>
+    bboxes.forEach((bb) => moveTo(centerX - bb.w / 2, bb.y, bb));
+  const alignR = () => bboxes.forEach((bb) => moveTo(maxX - bb.w, bb.y, bb));
+  const alignT = () => bboxes.forEach((bb) => moveTo(bb.x, minY, bb));
+  const alignCV = () =>
+    bboxes.forEach((bb) => moveTo(bb.x, centerY - bb.h / 2, bb));
+  const alignB = () => bboxes.forEach((bb) => moveTo(bb.x, maxY - bb.h, bb));
+
+  // Two flavours of distribute, matching what design tools call
+  // "equal gaps" and "equal centres" (Figma's "Distribute spacing" vs
+  // "Tidy up"; Inkscape lists both separately). For uniformly-sized
+  // layers they produce identical results; for mixed sizes they differ.
+  //
+  //  - Equal gaps:    constant whitespace between adjacent bboxes
+  //  - Equal centres: constant centre-to-centre distance
+  //
+  // Both keep the leftmost and rightmost layers anchored.
+  const distGapsH = () => {
+    if (bboxes.length < 3) return;
+    const sorted = [...bboxes].sort((a, b) => a.x - b.x);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const totalSpan = last.x + last.w - first.x;
+    const sumW = sorted.reduce((acc, b) => acc + b.w, 0);
+    const gap = (totalSpan - sumW) / (sorted.length - 1);
+    let cursor = first.x;
+    sorted.forEach((bb, i) => {
+      if (i > 0 && i < sorted.length - 1) {
+        moveTo(cursor, bb.y, bb);
+      }
+      cursor += bb.w + gap;
+    });
+  };
+  const distGapsV = () => {
+    if (bboxes.length < 3) return;
+    const sorted = [...bboxes].sort((a, b) => a.y - b.y);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const totalSpan = last.y + last.h - first.y;
+    const sumH = sorted.reduce((acc, b) => acc + b.h, 0);
+    const gap = (totalSpan - sumH) / (sorted.length - 1);
+    let cursor = first.y;
+    sorted.forEach((bb, i) => {
+      if (i > 0 && i < sorted.length - 1) {
+        moveTo(bb.x, cursor, bb);
+      }
+      cursor += bb.h + gap;
+    });
+  };
+  const distCentersH = () => {
+    if (bboxes.length < 3) return;
+    const sorted = [...bboxes]
+      .map((b) => ({ bb: b, c: b.x + b.w / 2 }))
+      .sort((a, b) => a.c - b.c);
+    const firstC = sorted[0].c;
+    const lastC = sorted[sorted.length - 1].c;
+    const step = (lastC - firstC) / (sorted.length - 1);
+    sorted.forEach((item, i) => {
+      if (i === 0 || i === sorted.length - 1) return;
+      const targetCenter = firstC + step * i;
+      moveTo(targetCenter - item.bb.w / 2, item.bb.y, item.bb);
+    });
+  };
+  const distCentersV = () => {
+    if (bboxes.length < 3) return;
+    const sorted = [...bboxes]
+      .map((b) => ({ bb: b, c: b.y + b.h / 2 }))
+      .sort((a, b) => a.c - b.c);
+    const firstC = sorted[0].c;
+    const lastC = sorted[sorted.length - 1].c;
+    const step = (lastC - firstC) / (sorted.length - 1);
+    sorted.forEach((item, i) => {
+      if (i === 0 || i === sorted.length - 1) return;
+      const targetCenter = firstC + step * i;
+      moveTo(item.bb.x, targetCenter - item.bb.h / 2, item.bb);
+    });
+  };
+
+  const disabled = bboxes.length < 2;
+  const distDisabled = bboxes.length < 3;
+
+  return (
+    <>
+      <p className="prop-meta">
+        {bboxes.length} of {idxs.length} layer{idxs.length === 1 ? "" : "s"}
+        {bboxes.length < idxs.length && " arrangeable"}
+      </p>
+      <label className="prop-relative">
+        <span>Relative to</span>
+        <select
+          value={relativeTo}
+          onChange={(e) => setRelativeTo(e.target.value as RelativeTo)}
+        >
+          <option value="selection">Selection</option>
+          <option value="canvas">Canvas (240×240)</option>
+          <option value="first">First selected</option>
+        </select>
+      </label>
+      <div
+        className="prop-alignment-row"
+        role="group"
+        aria-label="Align selection"
+      >
+        <button
+          type="button"
+          className="icon-btn"
+          title="Align left edges"
+          onClick={alignL}
+          disabled={disabled}
+        >
+          <AlignStartVertical size={14} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title="Align horizontal centres"
+          onClick={alignCH}
+          disabled={disabled}
+        >
+          <AlignCenterVertical size={14} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title="Align right edges"
+          onClick={alignR}
+          disabled={disabled}
+        >
+          <AlignEndVertical size={14} aria-hidden />
+        </button>
+        <span className="prop-alignment-sep" aria-hidden />
+        <button
+          type="button"
+          className="icon-btn"
+          title="Align top edges"
+          onClick={alignT}
+          disabled={disabled}
+        >
+          <AlignStartHorizontal size={14} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title="Align vertical centres"
+          onClick={alignCV}
+          disabled={disabled}
+        >
+          <AlignCenterHorizontal size={14} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title="Align bottom edges"
+          onClick={alignB}
+          disabled={disabled}
+        >
+          <AlignEndHorizontal size={14} aria-hidden />
+        </button>
+      </div>
+      <div
+        className="prop-alignment-row"
+        role="group"
+        aria-label="Distribute selection"
+      >
+        <button
+          type="button"
+          className="icon-btn"
+          title={
+            distDisabled
+              ? "Equal horizontal gaps (needs 3+ layers)"
+              : "Equal horizontal gaps"
+          }
+          onClick={distGapsH}
+          disabled={distDisabled}
+        >
+          <AlignHorizontalSpaceBetween size={14} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title={
+            distDisabled
+              ? "Distribute horizontal centres (needs 3+ layers)"
+              : "Distribute horizontal centres"
+          }
+          onClick={distCentersH}
+          disabled={distDisabled}
+        >
+          <AlignHorizontalDistributeCenter size={14} aria-hidden />
+        </button>
+        <span className="prop-alignment-sep" aria-hidden />
+        <button
+          type="button"
+          className="icon-btn"
+          title={
+            distDisabled
+              ? "Equal vertical gaps (needs 3+ layers)"
+              : "Equal vertical gaps"
+          }
+          onClick={distGapsV}
+          disabled={distDisabled}
+        >
+          <AlignVerticalSpaceBetween size={14} aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          title={
+            distDisabled
+              ? "Distribute vertical centres (needs 3+ layers)"
+              : "Distribute vertical centres"
+          }
+          onClick={distCentersV}
+          disabled={distDisabled}
+        >
+          <AlignVerticalDistributeCenter size={14} aria-hidden />
+        </button>
+      </div>
+    </>
+  );
+}
+
 function PropertyPanel() {
   const project = useEditor((s) => s.project);
-  const selectedIdx = useEditor((s) => s.selectedIdx);
+  const selectedIdxs = useEditor((s) => s.selectedIdxs);
   const assetDetailId = useEditor((s) => s.assetDetailId);
   const closeAssetDetail = useEditor((s) => s.closeAssetDetail);
   const setFaceNumber = useEditor((s) => s.setFaceNumber);
 
   const layers = useMemo(() => (project ? listLayers(project) : []), [project]);
-  const layer = selectedIdx !== null ? layers[selectedIdx] : undefined;
+  const singleIdx = selectedIdxs.length === 1 ? selectedIdxs[0] : null;
+  const layer = singleIdx !== null ? layers[singleIdx] : undefined;
 
   // Asset-detail mode takes over the sidebar entirely (replaces the layer
   // form). Only Type C carries the AssetSet model; FaceN ignores this branch.
@@ -376,8 +804,20 @@ function PropertyPanel() {
           </p>
         )}
 
-        {!layer && (
-          <p className="hint">Select a layer to edit its properties.</p>
+        {selectedIdxs.length === 0 && (
+          <p className="hint">
+            Select a layer to edit its properties. Shift- or Cmd/Ctrl-click
+            to multi-select, or drag on empty canvas to marquee-select.
+          </p>
+        )}
+
+        {selectedIdxs.length > 1 && (
+          <>
+            <h3>
+              {selectedIdxs.length} layers selected
+            </h3>
+            <MultiArrangeRow idxs={selectedIdxs} />
+          </>
         )}
 
         {layer && project && (

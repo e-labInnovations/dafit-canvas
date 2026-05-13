@@ -1159,6 +1159,11 @@ export const decodeBmpFile = async (file: File): Promise<DecodedBitmap> => {
 
 export type ReplaceOpts = {
   requireDimMatch: boolean
+  /** When the new BMP changes dims of a multi-slot AssetSet, clear the
+   *  other slots' rgba (preserving each slot's `compression`). Without this
+   *  the set ends up with mixed dimensions, which the firmware can't render.
+   *  Only meaningful for Type C. */
+  clearOtherSlots?: boolean
 }
 
 const requireMatch = (
@@ -1188,11 +1193,12 @@ export const replaceAsset = (
     if (opts.requireDimMatch && set.width > 0 && set.height > 0) {
       requireMatch({ width: set.width, height: set.height }, bitmap, `slot ${ref.slotIdx}`)
     }
-    const slots = set.slots.map((s, i) =>
+    const slots = set.slots.map((s, i) => {
       // Keep the imported-from-bin compression hint when only the pixels are
       // being replaced — same firmware-round-trip concern as elsewhere.
-      i === ref.slotIdx ? { ...s, rgba: bitmap.rgba } : s,
-    )
+      if (i === ref.slotIdx) return { ...s, rgba: bitmap.rgba }
+      return opts.clearOtherSlots ? { ...s, rgba: null } : s
+    })
     const assetSets = project.assetSets.map((s) =>
       s.id === ref.setId
         ? { ...s, width: bitmap.width, height: bitmap.height, slots }
@@ -1998,6 +2004,69 @@ const typeCDigitsBbox = (
     case 'C': startX = layer.x - Math.floor(totalW / 2); break
   }
   return { x: startX, y: layer.y, w: totalW, h: set.height }
+}
+
+/** The (x, y) anchor stored on the layer/element — what `setLayerPosition`
+ *  reads and writes. For Type C multi-digit kinds this differs from
+ *  `computeLayerBbox().x` (alignment shifts the bbox left/right of the
+ *  anchor), so drag handlers must use this, not the bbox. Returns null for
+ *  kinds whose position can't be moved as a single unit. */
+export const getLayerAnchor = (
+  project: EditorProject,
+  layerIdx: number,
+): { x: number; y: number } | null => {
+  if (project.format === 'typeC') {
+    const l = project.layers[layerIdx]
+    return l ? { x: l.x, y: l.y } : null
+  }
+  const el = project.face.elements[layerIdx]
+  if (!el) return null
+  switch (el.kind) {
+    case 'Image':
+    case 'TimeHand':
+    case 'BatteryFill':
+    case 'DayName':
+    case 'BarDisplay':
+    case 'Weather':
+    case 'HeartRateNum':
+    case 'StepsNum':
+    case 'KCalNum':
+      return { x: el.x, y: el.y }
+    case 'DayNum':
+    case 'MonthNum':
+    case 'TimeNum':
+      // Multi-slot kinds — anchor at the first slot. `setLayerXY` handles
+      // shifting the rest as a group.
+      return { x: el.xys[0].x, y: el.xys[0].y }
+    case 'Dash':
+    case 'Unknown29':
+    case 'Unknown':
+      return null
+  }
+}
+
+/** Reverse-iterate layers and return the index of the topmost one whose
+ *  bbox contains `(nx, ny)` in native 240×240 space. Returns `null` if the
+ *  point misses every layer or every layer reports a null bbox. Used by
+ *  the canvas to convert a click into a selection. */
+export const hitTestLayer = (
+  project: EditorProject,
+  nx: number,
+  ny: number,
+  dummy: DummyStateN,
+): number | null => {
+  const count =
+    project.format === 'typeC'
+      ? project.layers.length
+      : project.face.elements.length
+  for (let i = count - 1; i >= 0; i--) {
+    const bb = computeLayerBbox(project, i, dummy)
+    if (!bb) continue
+    if (nx >= bb.x && nx < bb.x + bb.w && ny >= bb.y && ny < bb.y + bb.h) {
+      return i
+    }
+  }
+  return null
 }
 
 export const computeLayerBbox = (

@@ -37,6 +37,8 @@ const rgbaToDataUrl = (
 
 function SlotRow({
   setId,
+  setName,
+  setCount,
   slotIdx,
   width,
   height,
@@ -44,6 +46,8 @@ function SlotRow({
   onError,
 }: {
   setId: string
+  setName: string
+  setCount: number
   slotIdx: number
   width: number
   height: number
@@ -63,10 +67,32 @@ function SlotRow({
       if (!file) return
       try {
         const bmp = await decodeBmpFile(file)
+        const dimsDiffer =
+          !isEmpty && (bmp.width !== width || bmp.height !== height)
+
+        // Single-slot or empty set: adopt the new dims silently.
+        // Multi-slot non-empty with new dims: confirm and clear siblings.
+        let opts: { requireDimMatch?: boolean; clearOtherSlots?: boolean }
+        if (isEmpty || setCount === 1) {
+          opts = { requireDimMatch: false }
+        } else if (dimsDiffer) {
+          const others = setCount - 1
+          const ok = window.confirm(
+            `The selected BMP is ${bmp.width}×${bmp.height} but "${setName}" is ${width}×${height}.\n\n` +
+              `Resize the whole set to ${bmp.width}×${bmp.height}? ` +
+              `The other ${others} slot${others === 1 ? '' : 's'} will be cleared ` +
+              `(pixel art doesn't scale cleanly, so they'd render wrong otherwise).`,
+          )
+          if (!ok) return
+          opts = { requireDimMatch: false, clearOtherSlots: true }
+        } else {
+          opts = { requireDimMatch: true }
+        }
+
         const err = replace(
           { tag: 'typeC-slot', setId, slotIdx },
           bmp,
-          !isEmpty,
+          opts,
         )
         if (err) onError(err)
       } catch (err) {
@@ -89,7 +115,13 @@ function SlotRow({
       <button
         type="button"
         className="icon-btn"
-        title={isEmpty ? 'Set BMP' : `Replace BMP (must be ${width}×${height})`}
+        title={
+          isEmpty
+            ? 'Set BMP'
+            : setCount === 1
+              ? 'Replace BMP (any size)'
+              : `Replace BMP (${width}×${height}, or resize the whole set)`
+        }
         aria-label={isEmpty ? 'Set BMP' : 'Replace BMP'}
         onClick={onPick}
       >
@@ -245,6 +277,8 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
           <SlotRow
             key={i}
             setId={set.id}
+            setName={set.name}
+            setCount={set.count}
             slotIdx={i}
             width={set.width}
             height={set.height}
