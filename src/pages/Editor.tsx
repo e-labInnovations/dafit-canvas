@@ -4,8 +4,12 @@ import {
   Binary,
   Bluetooth,
   Download,
+  Eye,
+  EyeOff,
   FilePlus2,
   FolderOpen,
+  Magnet,
+  Minus,
   Package,
   Redo2,
   Undo2,
@@ -54,6 +58,11 @@ function Editor() {
   const redo = useEditor((s) => s.redo);
   const canUndo = useEditor((s) => s.history.length > 0);
   const canRedo = useEditor((s) => s.future.length > 0);
+  const guidesVisible = useEditor((s) => s.guidesVisible);
+  const snapEnabled = useEditor((s) => s.snapEnabled);
+  const setGuidesVisible = useEditor((s) => s.setGuidesVisible);
+  const setSnapEnabled = useEditor((s) => s.setSnapEnabled);
+  const addGuideAction = useEditor((s) => s.addGuideAction);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const newBtnRef = useRef<HTMLButtonElement>(null);
@@ -61,36 +70,46 @@ function Editor() {
   const [importing, setImporting] = useState(false);
   const [uploadBytes, setUploadBytes] = useState<Uint8Array | null>(null);
 
+  const deleteSelectedGuides = useEditor((s) => s.deleteSelectedGuides);
+
   // Global Cmd/Ctrl-Z (and Shift-variant / Ctrl-Y) — wired at the page
   // level so the shortcut fires even when focus is on the canvas. We bail
   // out when the user is typing in a text field so native input undo still
-  // works inside name/number fields.
+  // works inside name/number fields. Backspace/Delete deletes selected
+  // guides for parity with the layer-delete affordance.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!e.metaKey && !e.ctrlKey) return;
       const t = e.target as HTMLElement | null;
-      if (
+      const inField =
         t instanceof HTMLInputElement ||
         t instanceof HTMLTextAreaElement ||
-        (t && t.isContentEditable)
-      ) {
+        (t && t.isContentEditable);
+      if (inField) return;
+      const k = e.key.toLowerCase();
+      if (e.metaKey || e.ctrlKey) {
+        if (k === "z" && e.shiftKey) {
+          e.preventDefault();
+          redo();
+        } else if (k === "z") {
+          e.preventDefault();
+          undo();
+        } else if (k === "y") {
+          e.preventDefault();
+          redo();
+        }
         return;
       }
-      const k = e.key.toLowerCase();
-      if (k === "z" && e.shiftKey) {
-        e.preventDefault();
-        redo();
-      } else if (k === "z") {
-        e.preventDefault();
-        undo();
-      } else if (k === "y") {
-        e.preventDefault();
-        redo();
+      if (e.key === "Backspace" || e.key === "Delete") {
+        const { selectedGuideIds } = useEditor.getState();
+        if (selectedGuideIds.length > 0) {
+          e.preventDefault();
+          deleteSelectedGuides();
+        }
       }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
+  }, [undo, redo, deleteSelectedGuides]);
 
   // Live projected .bin size for the editor header chip. The pack runs on
   // every project mutation, so we defer the computation — during a drag,
@@ -218,6 +237,79 @@ function Editor() {
                 aria-label="Redo"
               >
                 <Redo2 size={14} aria-hidden />
+              </button>
+            </Tooltip>
+          </div>
+          <div
+            className="editor-undo-group"
+            role="group"
+            aria-label="Guides and snapping"
+          >
+            <Tooltip content="Add horizontal guide at y = 120">
+              <button
+                type="button"
+                className="counter ghost"
+                onClick={() => addGuideAction("H", 120)}
+                disabled={!project}
+                aria-label="Add horizontal guide"
+              >
+                <Minus size={14} aria-hidden />
+              </button>
+            </Tooltip>
+            <Tooltip content="Add vertical guide at x = 120">
+              <button
+                type="button"
+                className="counter ghost"
+                onClick={() => addGuideAction("V", 120)}
+                disabled={!project}
+                aria-label="Add vertical guide"
+              >
+                <Minus
+                  size={14}
+                  aria-hidden
+                  style={{ transform: "rotate(90deg)" }}
+                />
+              </button>
+            </Tooltip>
+            <Tooltip
+              content={
+                guidesVisible
+                  ? "Hide all guides on the canvas"
+                  : "Show all guides on the canvas"
+              }
+            >
+              <button
+                type="button"
+                className={`counter ghost${guidesVisible ? " active" : ""}`}
+                onClick={() => setGuidesVisible(!guidesVisible)}
+                disabled={!project}
+                aria-pressed={guidesVisible}
+                aria-label={
+                  guidesVisible ? "Hide guides" : "Show guides"
+                }
+              >
+                {guidesVisible ? (
+                  <Eye size={14} aria-hidden />
+                ) : (
+                  <EyeOff size={14} aria-hidden />
+                )}
+              </button>
+            </Tooltip>
+            <Tooltip
+              content={
+                snapEnabled
+                  ? "Disable snapping while dragging"
+                  : "Enable snapping while dragging"
+              }
+            >
+              <button
+                type="button"
+                className={`counter ghost${snapEnabled ? " active" : ""}`}
+                onClick={() => setSnapEnabled(!snapEnabled)}
+                aria-pressed={snapEnabled}
+                aria-label={snapEnabled ? "Disable snapping" : "Enable snapping"}
+              >
+                <Magnet size={14} aria-hidden />
               </button>
             </Tooltip>
           </div>

@@ -45,6 +45,7 @@ import type {
   AssetSlot,
   EditorProject,
   FaceNProject,
+  GuideLine,
   TypeCLayer,
   TypeCProject,
   WatchFormat,
@@ -107,6 +108,7 @@ export const emptyTypeCProject = (faceNumber = 50001): TypeCProject => ({
   animationFrames: 0,
   layers: [],
   assetSets: [],
+  guides: [],
 })
 
 export const emptyFaceNProject = (): FaceNProject => ({
@@ -126,6 +128,7 @@ export const emptyFaceNProject = (): FaceNProject => ({
     digitSets: [],
     elements: [],
   },
+  guides: [],
 })
 
 export const emptyProject = (format: WatchFormat): EditorProject =>
@@ -334,6 +337,7 @@ const decodeTypeCBin = (data: Uint8Array, fileName: string): TypeCProject => {
     animationFrames: header.animationFrames,
     layers: layerToKey.map((e) => e.layer),
     assetSets: Array.from(groupForKey.values()),
+    guides: [],
   }
 }
 
@@ -345,7 +349,7 @@ export const importBin = async (file: File): Promise<EditorProject> => {
   if (fmt === 'typeC') return decodeTypeCBin(data, file.name)
   if (fmt === 'faceN') {
     const face = parseFaceN(data)
-    return { format: 'faceN', fileName: file.name, face }
+    return { format: 'faceN', fileName: file.name, face, guides: [] }
   }
   throw new Error(
     `Unrecognized .bin format. First byte 0x${data[0]?.toString(16).padStart(2, '0')}.`,
@@ -438,7 +442,7 @@ export const importZip = async (file: File): Promise<EditorProject> => {
   const config = parseWatchfaceJson(txt)
   const bin = packFaceN({ config, bitmaps: assets.byName })
   const face = parseFaceN(bin)
-  return { format: 'faceN', fileName: file.name, face }
+  return { format: 'faceN', fileName: file.name, face, guides: [] }
 }
 
 // ---------- export: TypeC project → bin ----------
@@ -494,6 +498,10 @@ type ProjectJsonV1 = {
      *  entries fall back to the encoder default. */
     slotCompressions?: ('RLE_LINE' | 'NONE' | null)[]
   }[]
+  /** Editor-only design overlay. Watch firmware ignores extra JSON fields,
+   *  so guides survive the dawft ZIP round-trip safely. Optional for
+   *  forward-compat: older project.json predates this field. */
+  guides?: GuideLine[]
 }
 
 const orphanSlotName = (setId: string, slotIdx: number): string =>
@@ -560,6 +568,7 @@ export const exportTypeCZip = async (project: TypeCProject): Promise<Blob> => {
         slotCompressions,
       }
     }),
+    guides: project.guides,
   }
   zip.file('project.json', JSON.stringify(projectJson, null, 2))
 
@@ -634,7 +643,29 @@ const restoreFromProjectJson = async (
     animationFrames: json.animationFrames,
     layers: json.layers,
     assetSets,
+    guides: sanitizeGuides(json.guides),
   }
+}
+
+/** Defensive parse for guides coming off project.json — discards malformed
+ *  entries instead of throwing, so a corrupt side-file still opens. */
+const sanitizeGuides = (raw: unknown): GuideLine[] => {
+  if (!Array.isArray(raw)) return []
+  const out: GuideLine[] = []
+  for (const g of raw) {
+    if (!g || typeof g !== 'object') continue
+    const r = g as Record<string, unknown>
+    if (typeof r.id !== 'string') continue
+    if (r.axis !== 'H' && r.axis !== 'V') continue
+    if (typeof r.position !== 'number' || !Number.isFinite(r.position)) continue
+    out.push({
+      id: r.id,
+      axis: r.axis,
+      position: r.position,
+      visible: r.visible !== false,
+    })
+  }
+  return out
 }
 
 // ---------- export: FaceN ----------
@@ -2523,3 +2554,242 @@ export const computeLayerBbox = (
   }
 }
 
+// ---------- guides: CRUD helpers ----------
+
+/** Append a new guide at `position` on the given axis. Returns the new
+ *  project plus the new guide's id so callers can put it straight into
+ *  `selectedGuideIds`. */
+export const addGuide = (
+  project: EditorProject,
+  axis: 'H' | 'V',
+  position: number,
+): { project: EditorProject; id: string } => {
+  const id = nextId('guide')
+  const guide: GuideLine = {
+    id,
+    axis,
+    position: clampGuidePosition(position),
+    visible: true,
+  }
+  return {
+    project: withGuides(project, [...project.guides, guide]),
+    id,
+  }
+}
+
+export const moveGuide = (
+  project: EditorProject,
+  id: string,
+  position: number,
+): EditorProject => {
+  const next = project.guides.map((g) =>
+    g.id === id ? { ...g, position: clampGuidePosition(position) } : g,
+  )
+  return withGuides(project, next)
+}
+
+export const removeGuide = (
+  project: EditorProject,
+  id: string,
+): EditorProject => withGuides(project, project.guides.filter((g) => g.id !== id))
+
+export const removeGuides = (
+  project: EditorProject,
+  ids: string[],
+): EditorProject => {
+  if (ids.length === 0) return project
+  const set = new Set(ids)
+  return withGuides(project, project.guides.filter((g) => !set.has(g.id)))
+}
+
+export const setGuideVisible = (
+  project: EditorProject,
+  id: string,
+  visible: boolean,
+): EditorProject =>
+  withGuides(
+    project,
+    project.guides.map((g) => (g.id === id ? { ...g, visible } : g)),
+  )
+
+export const setAllGuidesVisible = (
+  project: EditorProject,
+  visible: boolean,
+): EditorProject =>
+  withGuides(
+    project,
+    project.guides.map((g) => ({ ...g, visible })),
+  )
+
+const withGuides = (project: EditorProject, guides: GuideLine[]): EditorProject =>
+  project.format === 'typeC'
+    ? { ...project, guides }
+    : { ...project, guides }
+
+const clampGuidePosition = (n: number): number => {
+  // Clamp to native canvas + round to integer pixel so guides land on the
+  // same pixel grid as layers (otherwise a half-pixel guide drifts visually).
+  const clamped = Math.max(0, Math.min(240, n))
+  return Math.round(clamped)
+}
+
+// ---------- snap candidates ----------
+
+/** A single snap candidate line in native space. `axis: 'V'` means the line
+ *  is vertical (constant x) and only matches horizontal-axis snap targets.
+ *  `kind` drives the smart-guide color/label; `sourceId` lets the renderer
+ *  highlight the originating guide/layer. */
+export type SnapCandidate = {
+  axis: 'H' | 'V'
+  position: number
+  kind: 'guide' | 'canvas-edge' | 'canvas-center' | 'layer-edge' | 'layer-center'
+  sourceId?: string
+}
+
+const NATIVE_SIZE = 240
+const CANVAS_CENTER = 120
+
+/** Build the snap-target line list for the current project state. Pass
+ *  `excludeLayerIdxs` so the items being dragged don't snap to themselves;
+ *  `excludeGuideIds` is the analogous knob for guide-on-guide drag. */
+export const computeSnapCandidates = (
+  project: EditorProject,
+  dummy: DummyStateN,
+  excludeLayerIdxs: number[],
+  excludeGuideIds: string[],
+): SnapCandidate[] => {
+  const candidates: SnapCandidate[] = []
+  // Canvas frame: 4 edges + 2 centerlines. Cheap; always included.
+  candidates.push(
+    { axis: 'V', position: 0, kind: 'canvas-edge' },
+    { axis: 'V', position: NATIVE_SIZE, kind: 'canvas-edge' },
+    { axis: 'H', position: 0, kind: 'canvas-edge' },
+    { axis: 'H', position: NATIVE_SIZE, kind: 'canvas-edge' },
+    { axis: 'V', position: CANVAS_CENTER, kind: 'canvas-center' },
+    { axis: 'H', position: CANVAS_CENTER, kind: 'canvas-center' },
+  )
+  // Visible, non-dragging guides.
+  const skipGuides = new Set(excludeGuideIds)
+  for (const g of project.guides) {
+    if (!g.visible) continue
+    if (skipGuides.has(g.id)) continue
+    candidates.push({
+      axis: g.axis === 'H' ? 'H' : 'V',
+      position: g.position,
+      kind: 'guide',
+      sourceId: g.id,
+    })
+  }
+  // Non-dragging layers' bbox edges + centers. Skip layers without a
+  // resolvable bbox (FaceN digit-dependent kinds, etc.).
+  const skipLayers = new Set(excludeLayerIdxs)
+  const layerCount =
+    project.format === 'typeC'
+      ? project.layers.length
+      : project.face.elements.length
+  for (let i = 0; i < layerCount; i++) {
+    if (skipLayers.has(i)) continue
+    const bb = computeLayerBbox(project, i, dummy)
+    if (!bb) continue
+    const id =
+      project.format === 'typeC'
+        ? project.layers[i].id
+        : `el:${i}`
+    const cx = bb.x + bb.w / 2
+    const cy = bb.y + bb.h / 2
+    candidates.push(
+      { axis: 'V', position: bb.x, kind: 'layer-edge', sourceId: id },
+      { axis: 'V', position: bb.x + bb.w, kind: 'layer-edge', sourceId: id },
+      { axis: 'V', position: cx, kind: 'layer-center', sourceId: id },
+      { axis: 'H', position: bb.y, kind: 'layer-edge', sourceId: id },
+      { axis: 'H', position: bb.y + bb.h, kind: 'layer-edge', sourceId: id },
+      { axis: 'H', position: cy, kind: 'layer-center', sourceId: id },
+    )
+  }
+  return candidates
+}
+
+/** Try to snap an axis value (a bbox edge or center) to the nearest
+ *  candidate within `threshold`. Returns the snapped position and the
+ *  matching candidate, or null when nothing's in range. */
+export const findSnap = (
+  value: number,
+  axis: 'H' | 'V',
+  candidates: SnapCandidate[],
+  threshold: number,
+): { position: number; candidate: SnapCandidate } | null => {
+  let best: { position: number; candidate: SnapCandidate; dist: number } | null = null
+  for (const c of candidates) {
+    if (c.axis !== axis) continue
+    const d = Math.abs(c.position - value)
+    if (d > threshold) continue
+    if (!best || d < best.dist) {
+      best = { position: c.position, candidate: c, dist: d }
+    }
+  }
+  if (!best) return null
+  return { position: best.position, candidate: best.candidate }
+}
+
+/** Wraps a layer drag: given the *raw* candidate dx/dy (rounded native px)
+ *  and the bbox of the layer/group being moved, find the best snap on each
+ *  axis and return the adjusted (dx, dy) plus the matched candidates so the
+ *  canvas can render smart-guide overlays. Operates on the group's union
+ *  bbox so multi-select drag snaps coherently. */
+export const resolveSnap = (
+  groupBbox: { x: number; y: number; w: number; h: number },
+  rawDx: number,
+  rawDy: number,
+  candidates: SnapCandidate[],
+  threshold: number,
+): {
+  dx: number
+  dy: number
+  matchedV: SnapCandidate | null
+  matchedH: SnapCandidate | null
+} => {
+  // For each axis, probe three positions on the moved bbox: leading edge,
+  // center, trailing edge. Pick the closest snap across all three.
+  const probeX = [
+    groupBbox.x + rawDx,
+    groupBbox.x + groupBbox.w / 2 + rawDx,
+    groupBbox.x + groupBbox.w + rawDx,
+  ]
+  const probeY = [
+    groupBbox.y + rawDy,
+    groupBbox.y + groupBbox.h / 2 + rawDy,
+    groupBbox.y + groupBbox.h + rawDy,
+  ]
+  let snapDx = rawDx
+  let snapDy = rawDy
+  let matchedV: SnapCandidate | null = null
+  let matchedH: SnapCandidate | null = null
+  let bestVDist = Infinity
+  let bestHDist = Infinity
+  for (const v of probeX) {
+    const snap = findSnap(v, 'V', candidates, threshold)
+    if (!snap) continue
+    const delta = snap.position - v
+    if (Math.abs(delta) < bestVDist) {
+      bestVDist = Math.abs(delta)
+      snapDx = rawDx + delta
+      matchedV = snap.candidate
+    }
+  }
+  for (const v of probeY) {
+    const snap = findSnap(v, 'H', candidates, threshold)
+    if (!snap) continue
+    const delta = snap.position - v
+    if (Math.abs(delta) < bestHDist) {
+      bestHDist = Math.abs(delta)
+      snapDy = rawDy + delta
+      matchedH = snap.candidate
+    }
+  }
+  return {
+    dx: Math.round(snapDx),
+    dy: Math.round(snapDy),
+    matchedV,
+    matchedH,
+  }
+}

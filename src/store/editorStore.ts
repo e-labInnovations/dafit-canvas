@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { defaultDummy } from '../lib/renderFace'
 import { defaultDummyN, type DummyStateN } from '../lib/renderFaceN'
 import {
+  addGuide,
   appendAssetSets,
   createTypeCAssetSet,
   deleteAssetSet,
@@ -12,15 +13,19 @@ import {
   insertFaceNDigitSet,
   insertFaceNLayer,
   insertTypeCLayer,
+  moveGuide,
   moveLayer,
   patchFaceNElement,
   patchTypeCLayer,
   rebindLayer,
   regenerateAssetSet,
   regenerateFaceNDigitSet,
+  removeGuides,
   renameAssetSet,
   replaceAsset,
   reorderLayer,
+  setAllGuidesVisible,
+  setGuideVisible,
   setLayerXY,
   type AssetRef,
   type FaceNDigitDependentKind,
@@ -44,6 +49,7 @@ type FNEl = FaceN['elements'][number]
 type Snapshot = {
   project: EditorProject
   selectedIdxs: number[]
+  selectedGuideIds: string[]
 }
 
 /** One step on the undo stack. `key` is used by `mutate` to coalesce rapid
@@ -67,6 +73,18 @@ type EditorState = {
    *  matters: `selectedIdxs[0]` is the anchor (the "first selected" layer)
    *  used by range-select in LayerList and by the Relative-to selector. */
   selectedIdxs: number[]
+  /** Guide selection runs in a parallel slot to `selectedIdxs` — clicking a
+   *  guide swaps to guide-selection mode, clicking a layer swaps back.
+   *  Multi-select inside the guide bucket via shift-click is supported.
+   *  Both arrays feed the multi-arrange property panel together. */
+  selectedGuideIds: string[]
+  /** Master toggle for guide visibility. Independent from each guide's own
+   *  `visible` flag — hiding all here doesn't *forget* the per-guide state.
+   *  Lives outside the project so toggling it doesn't poison undo. */
+  guidesVisible: boolean
+  /** Whether dragging snaps to guides/edges/centers/other layers. Same
+   *  rationale as `guidesVisible` — session-only, not undoable. */
+  snapEnabled: boolean
   /** Undo stack — past snapshots. Most recent at the end. Cleared when a
    *  fresh project is loaded (a different file has no meaningful history). */
   history: HistoryEntry[]
@@ -112,6 +130,23 @@ type EditorState = {
    *  `mode === 'add'`, the supplied indices are unioned with the current
    *  selection instead of replacing it. */
   selectMany: (idxs: number[], mode?: 'replace' | 'add') => void
+
+  // guide actions
+  addGuideAction: (axis: 'H' | 'V', position?: number) => void
+  moveGuideAction: (id: string, position: number) => void
+  setGuideVisibleAction: (id: string, visible: boolean) => void
+  /** Toggle the master visibility flag (session-only, not undoable). */
+  setGuidesVisible: (visible: boolean) => void
+  /** Toggle snapping on/off (session-only, not undoable). */
+  setSnapEnabled: (enabled: boolean) => void
+  /** Replace guide selection with one guide or clear (`null`). Also clears
+   *  the layer selection so the property panel switches modes cleanly. */
+  selectGuide: (id: string | null) => void
+  /** Add/remove a guide from the current guide selection for shift-click. */
+  toggleGuideSelected: (id: string) => void
+  /** Delete every guide currently in `selectedGuideIds` in one undo step. */
+  deleteSelectedGuides: () => void
+
   setLayerPosition: (idx: number, x: number, y: number) => void
   reorderLayer: (idx: number, direction: 'up' | 'down') => void
   /** Move a layer to a specific index (post-removal slot). Used by the
@@ -220,6 +255,7 @@ export const useEditor = create<EditorState>((set, get) => {
       const beforeSnapshot: Snapshot = {
         project: state.project,
         selectedIdxs: state.selectedIdxs,
+        selectedGuideIds: state.selectedGuideIds,
       }
       const last = state.history[state.history.length - 1]
       const now = Date.now()
@@ -248,6 +284,9 @@ export const useEditor = create<EditorState>((set, get) => {
   return {
   project: null,
   selectedIdxs: [],
+  selectedGuideIds: [],
+  guidesVisible: true,
+  snapEnabled: true,
   history: [],
   future: [],
   assetDetailId: null,
@@ -258,6 +297,7 @@ export const useEditor = create<EditorState>((set, get) => {
     set({
       project: emptyProject(format),
       selectedIdxs: [],
+      selectedGuideIds: [],
       assetDetailId: null,
       error: null,
       // A new project has no meaningful history relative to its predecessor.
@@ -269,6 +309,7 @@ export const useEditor = create<EditorState>((set, get) => {
     set({
       project,
       selectedIdxs: [],
+      selectedGuideIds: [],
       assetDetailId: null,
       error: null,
       history: [],
@@ -279,6 +320,7 @@ export const useEditor = create<EditorState>((set, get) => {
     set({
       project: null,
       selectedIdxs: [],
+      selectedGuideIds: [],
       assetDetailId: null,
       error: null,
       history: [],
@@ -294,11 +336,16 @@ export const useEditor = create<EditorState>((set, get) => {
       const entry = history.pop()!
       const future: Snapshot[] = [
         ...state.future,
-        { project: state.project, selectedIdxs: state.selectedIdxs },
+        {
+          project: state.project,
+          selectedIdxs: state.selectedIdxs,
+          selectedGuideIds: state.selectedGuideIds,
+        },
       ]
       return {
         project: entry.snapshot.project,
         selectedIdxs: entry.snapshot.selectedIdxs,
+        selectedGuideIds: entry.snapshot.selectedGuideIds,
         history,
         future,
       }
@@ -317,6 +364,7 @@ export const useEditor = create<EditorState>((set, get) => {
           snapshot: {
             project: state.project,
             selectedIdxs: state.selectedIdxs,
+            selectedGuideIds: state.selectedGuideIds,
           },
           key: '__redo__',
           timestamp: Date.now(),
@@ -326,6 +374,7 @@ export const useEditor = create<EditorState>((set, get) => {
       return {
         project: next.project,
         selectedIdxs: next.selectedIdxs,
+        selectedGuideIds: next.selectedGuideIds,
         history,
         future,
       }
@@ -337,11 +386,18 @@ export const useEditor = create<EditorState>((set, get) => {
   // Selecting a layer hands the right pane to the layer-properties view.
   // The asset-detail view stays open only when the user lands on an empty
   // selection (so they can still browse the library after deselecting).
+  // Picking a layer also clears any guide selection — the two buckets are
+  // mutually exclusive at single-select time so PropertyPanel knows which
+  // mode to render.
   select: (idx) =>
     set(
       idx === null
-        ? { selectedIdxs: [] }
-        : { selectedIdxs: [idx], assetDetailId: null },
+        ? { selectedIdxs: [], selectedGuideIds: [] }
+        : {
+            selectedIdxs: [idx],
+            selectedGuideIds: [],
+            assetDetailId: null,
+          },
     ),
 
   toggleSelected: (idx) =>
@@ -381,10 +437,93 @@ export const useEditor = create<EditorState>((set, get) => {
       if (mode === 'replace') {
         const next = dedupe(idxs)
         return next.length > 0
-          ? { selectedIdxs: next, assetDetailId: null }
+          ? { selectedIdxs: next, selectedGuideIds: [], assetDetailId: null }
           : { selectedIdxs: next }
       }
       return { selectedIdxs: dedupe([...state.selectedIdxs, ...idxs]) }
+    }),
+
+  addGuideAction: (axis, position) =>
+    mutate(
+      (state) => {
+        if (!state.project) return state
+        const pos = position ?? 120
+        const { project: next, id } = addGuide(state.project, axis, pos)
+        return {
+          project: next,
+          // Select the new guide so the user can immediately tune it.
+          selectedGuideIds: [id],
+          selectedIdxs: [],
+          assetDetailId: null,
+        }
+      },
+      // Each insert is its own undo step — no coalescing.
+    ),
+
+  moveGuideAction: (id, position) =>
+    mutate(
+      (state) => {
+        if (!state.project) return state
+        return { project: moveGuide(state.project, id, position) }
+      },
+      // Coalesce a drag's many move calls (matches setLayerPosition's
+      // per-target key pattern).
+      `moveGuide:${id}`,
+    ),
+
+  setGuideVisibleAction: (id, visible) =>
+    mutate((state) => {
+      if (!state.project) return state
+      return { project: setGuideVisible(state.project, id, visible) }
+    }),
+
+  setGuidesVisible: (visible) =>
+    set((state) => {
+      if (!state.project) return { guidesVisible: visible }
+      // The master toggle also flips every per-guide flag. That way the
+      // sidebar list visibly reflects the state — no "all guides on but
+      // none shown" hidden mode. Project mutation goes through `mutate`
+      // so this *is* undoable when a project exists.
+      const next = setAllGuidesVisible(state.project, visible)
+      return { project: next, guidesVisible: visible }
+    }),
+
+  setSnapEnabled: (enabled) => set({ snapEnabled: enabled }),
+
+  selectGuide: (id) =>
+    set(
+      id === null
+        ? { selectedGuideIds: [] }
+        : {
+            selectedGuideIds: [id],
+            selectedIdxs: [],
+            assetDetailId: null,
+          },
+    ),
+
+  toggleGuideSelected: (id) =>
+    set((state) => {
+      const i = state.selectedGuideIds.indexOf(id)
+      if (i >= 0) {
+        const next = state.selectedGuideIds.slice()
+        next.splice(i, 1)
+        return { selectedGuideIds: next }
+      }
+      // Append; leave layer selection intact so shift-clicking a guide
+      // after a layer can build a mixed selection for align/distribute.
+      return {
+        selectedGuideIds: [...state.selectedGuideIds, id],
+        assetDetailId: null,
+      }
+    }),
+
+  deleteSelectedGuides: () =>
+    mutate((state) => {
+      if (!state.project || state.selectedGuideIds.length === 0) return state
+      return {
+        project: removeGuides(state.project, state.selectedGuideIds),
+        selectedGuideIds: [],
+      }
     }),
 
   setLayerPosition: (idx, x, y) =>

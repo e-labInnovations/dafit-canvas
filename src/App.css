@@ -1664,6 +1664,205 @@
   border-radius: 1px;
 }
 
+/* Persistent guide lines — user-created design aids. Horizontal guides
+ * span the full canvas width; vertical guides span the full height. The
+ * line itself is 1 px but pointer hit-testing happens in JS with a wider
+ * tolerance (see GUIDE_HIT_PADDING). Pointer-events stays `none` so the
+ * underlying canvas surface receives the gesture and EditorCanvas can
+ * resolve the hit against the right guide axis. */
+.editor-guide {
+  position: absolute;
+  pointer-events: none;
+  background: #00bcd4;
+  opacity: 0.6;
+}
+.editor-guide-horizontal {
+  height: 1px;
+}
+.editor-guide-vertical {
+  width: 1px;
+}
+.editor-guide.selected {
+  opacity: 1;
+  box-shadow: 0 0 0 1px rgba(0, 188, 212, 0.35);
+}
+
+/* Smart guides — transient overlays that appear during drag to indicate a
+ * snap alignment. Color contrasts with the user-guide cyan so the user
+ * can tell a "you can grab this" line from a "drag-time snap" line. */
+.editor-smart-guide {
+  position: absolute;
+  pointer-events: none;
+  background: #ff4081;
+  opacity: 0.85;
+}
+.editor-smart-guide-horizontal {
+  height: 1px;
+}
+.editor-smart-guide-vertical {
+  width: 1px;
+}
+
+/* Pressed-state toggle buttons in the toolbar (Snap, Guides visibility). */
+.counter.ghost.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Guides side-panel section — sits in the layers pane between the layer
+ * list and the asset library. Header matches `.asset-library-header`
+ * (mono uppercase title + count chip + compact action buttons) and rows
+ * adopt the `.layer-row` border/selected treatment for consistency. */
+.guides-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.guides-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: nowrap;
+
+  h4 {
+    margin: 0;
+    margin-right: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+}
+.guides-count {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  font-size: 10px;
+  border-radius: 999px;
+  background: var(--code-bg);
+  color: var(--text-h);
+  letter-spacing: 0;
+}
+.guides-actions {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.guides-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.guide-row {
+  /* Flex (not grid) so the inner button can be a real flex item without
+   * needing `display: contents`, which has inconsistent behavior across
+   * browsers and was causing the row to wrap onto multiple lines. */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-h);
+  user-select: none;
+  -webkit-user-select: none;
+  position: relative;
+
+  &:hover {
+    background: var(--social-bg);
+  }
+
+  &.guide-row-selected {
+    border-color: var(--accent-border);
+    background: var(--accent-bg);
+  }
+}
+.guide-row-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+}
+.guide-row-axis {
+  color: #00bcd4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+.guide-row-label {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.5px;
+}
+.guide-row-selected .guide-row-label {
+  color: var(--text-h);
+  font-weight: 600;
+}
+.guide-row-axis-icon {
+  display: inline-block;
+  background: #00bcd4;
+}
+.guide-row-axis-icon.horizontal {
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+}
+.guide-row-axis-icon.vertical {
+  width: 2px;
+  height: 12px;
+  border-radius: 1px;
+}
+.guide-row-pick {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  padding: 2px 4px;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.guide-row-axis {
+  color: #00bcd4;
+  font-weight: bold;
+  width: 12px;
+  display: inline-block;
+  text-align: center;
+}
+.guide-row-label {
+  font-variant-numeric: tabular-nums;
+}
+
 /* The pointer-event surface that wraps the FacePreview canvas. The frame
  * itself (.face-preview-frame) is inside; we hang the cursor on this outer
  * wrapper so it reads naturally over the canvas hardware-pixels. */
@@ -1690,6 +1889,17 @@
   .icon-btn {
     flex: 0 0 auto;
   }
+}
+
+/* Tiny chip in the guide-multi-align row labelling which axis the row
+ * targets ("3H" / "2V"). Helps when the selection mixes both axes. */
+.prop-alignment-axis-label {
+  font-size: 11px;
+  color: var(--text-l);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
 }
 
 .prop-alignment-sep {

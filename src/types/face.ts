@@ -78,6 +78,7 @@ export type TypeCProject = {
   animationFrames: number
   layers: TypeCLayer[]
   assetSets: AssetSet[]
+  guides: GuideLine[]
 }
 
 // ---------- FaceN (unchanged for this slice) ----------
@@ -88,6 +89,22 @@ export type FaceNProject = {
   format: 'faceN'
   fileName: string | null
   face: FaceN
+  guides: GuideLine[]
+}
+
+// ---------- Guides (design-tool overlay, both formats) ----------
+
+/** A horizontal or vertical ruler-style guide drawn over the canvas. Not a
+ *  layer / not an asset / never rendered to the watch — purely a positioning
+ *  aid in the editor. `position` is in native 240×240 px (the y-coord for
+ *  horizontal guides, x-coord for vertical guides). `visible` lets the user
+ *  hide individual guides without deleting them; an additional global toggle
+ *  lives in the store (`guidesVisible`). */
+export type GuideLine = {
+  id: string
+  axis: 'H' | 'V'
+  position: number
+  visible: boolean
 }
 
 export type EditorProject = TypeCProject | FaceNProject

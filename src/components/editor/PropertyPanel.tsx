@@ -10,6 +10,8 @@ import {
   AlignHorizontalSpaceBetween,
   AlignVerticalDistributeCenter,
   AlignVerticalSpaceBetween,
+  Eye,
+  EyeOff,
   Trash2,
 } from "lucide-react";
 import { useEditor } from "../../store/editorStore";
@@ -23,7 +25,7 @@ import AssetCard from "./AssetCard";
 import AssetDetailView from "./AssetDetailView";
 import Tooltip from "../Tooltip";
 import type { FaceN } from "../../lib/faceN";
-import type { EditorProject } from "../../types/face";
+import type { EditorProject, GuideLine } from "../../types/face";
 import type { DummyStateN } from "../../lib/renderFaceN";
 
 type FNEl = FaceN["elements"][number];
@@ -414,6 +416,260 @@ function AlignmentRow({ idx }: { idx: number }) {
   );
 }
 
+/** Property panel content for a single selected guide. Lets the user
+ *  retune position, flip per-guide visibility, snap to canvas extremes,
+ *  and delete. Multi-guide selection goes through `MultiArrangeRow` like
+ *  layers do. */
+function GuideFields({ guide }: { guide: GuideLine }) {
+  const moveGuideAction = useEditor((s) => s.moveGuideAction);
+  const setGuideVisibleAction = useEditor((s) => s.setGuideVisibleAction);
+  const deleteSelectedGuides = useEditor((s) => s.deleteSelectedGuides);
+
+  const max = guide.axis === "H" ? SCREEN_H : SCREEN_W;
+  const axisLabel = guide.axis === "H" ? "Horizontal" : "Vertical";
+  const posLabel = guide.axis === "H" ? "y" : "x";
+
+  return (
+    <>
+      <p className="prop-meta">
+        {axisLabel} guide · {posLabel} = {guide.position}
+      </p>
+      <NumField
+        label={posLabel}
+        value={guide.position}
+        onChange={(n) => moveGuideAction(guide.id, n)}
+        min={0}
+        max={max}
+      />
+      <div className="prop-alignment-row" role="group" aria-label="Snap guide">
+        <Tooltip content={`Snap to ${posLabel} = 0`}>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => moveGuideAction(guide.id, 0)}
+          >
+            {guide.axis === "H" ? (
+              <AlignStartHorizontal size={14} aria-hidden />
+            ) : (
+              <AlignStartVertical size={14} aria-hidden />
+            )}
+          </button>
+        </Tooltip>
+        <Tooltip content={`Snap to centre (${posLabel} = ${max / 2})`}>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => moveGuideAction(guide.id, max / 2)}
+          >
+            {guide.axis === "H" ? (
+              <AlignCenterHorizontal size={14} aria-hidden />
+            ) : (
+              <AlignCenterVertical size={14} aria-hidden />
+            )}
+          </button>
+        </Tooltip>
+        <Tooltip content={`Snap to ${posLabel} = ${max}`}>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => moveGuideAction(guide.id, max)}
+          >
+            {guide.axis === "H" ? (
+              <AlignEndHorizontal size={14} aria-hidden />
+            ) : (
+              <AlignEndVertical size={14} aria-hidden />
+            )}
+          </button>
+        </Tooltip>
+      </div>
+      <Tooltip
+        content={guide.visible ? "Hide this guide" : "Show this guide"}
+      >
+        <button
+          type="button"
+          className="counter ghost"
+          onClick={() => setGuideVisibleAction(guide.id, !guide.visible)}
+        >
+          {guide.visible ? (
+            <Eye size={14} aria-hidden />
+          ) : (
+            <EyeOff size={14} aria-hidden />
+          )}
+          {guide.visible ? "Visible" : "Hidden"}
+        </button>
+      </Tooltip>
+      <button
+        type="button"
+        className="counter ghost danger prop-delete"
+        onClick={() => deleteSelectedGuides()}
+      >
+        <Trash2 size={14} aria-hidden />
+        Delete guide
+      </button>
+    </>
+  );
+}
+
+/** Align / distribute / delete row for a multi-guide selection. Each axis
+ *  has its own controls because alignment only makes sense within a single
+ *  axis (you can't align a horizontal and vertical guide to the same
+ *  "top"). Mixed-axis selections show controls for both — disabled buttons
+ *  fade out when the relevant axis doesn't have enough guides. */
+function MultiGuideArrangeRow({ guides }: { guides: GuideLine[] }) {
+  const moveGuideAction = useEditor((s) => s.moveGuideAction);
+
+  const horizontal = guides.filter((g) => g.axis === "H");
+  const vertical = guides.filter((g) => g.axis === "V");
+
+  // Align — snap a list to a single canvas-relative position.
+  const alignTo = (axis: "H" | "V", target: number) => {
+    const list = axis === "H" ? horizontal : vertical;
+    for (const g of list) moveGuideAction(g.id, target);
+  };
+
+  // Distribute — pin extremes, evenly space middle entries. Guides have
+  // zero extent so "equal gaps" == "equal centres" — a single function
+  // covers both interpretations.
+  const distribute = (axis: "H" | "V") => {
+    const list = axis === "H" ? horizontal : vertical;
+    if (list.length < 3) return;
+    const sorted = [...list].sort((a, b) => a.position - b.position);
+    const first = sorted[0].position;
+    const last = sorted[sorted.length - 1].position;
+    const step = (last - first) / (sorted.length - 1);
+    for (let i = 1; i < sorted.length - 1; i++) {
+      moveGuideAction(sorted[i].id, Math.round(first + step * i));
+    }
+  };
+
+  // A row is shown when at least one matching-axis guide is selected.
+  // 2+ are needed for align to be meaningful (snapping one already happens
+  // via single-guide controls); 3+ for distribute.
+  const showH = horizontal.length >= 1;
+  const showV = vertical.length >= 1;
+  const canAlignH = horizontal.length >= 2;
+  const canAlignV = vertical.length >= 2;
+  const canDistH = horizontal.length >= 3;
+  const canDistV = vertical.length >= 3;
+
+  return (
+    <>
+      {showH && (
+        <div
+          className="prop-alignment-row"
+          role="group"
+          aria-label="Horizontal guides — align Y"
+        >
+          <span className="prop-alignment-axis-label">{horizontal.length}H</span>
+          <Tooltip content="Align to top (y = 0)">
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => alignTo("H", 0)}
+              disabled={!canAlignH}
+            >
+              <AlignStartHorizontal size={14} aria-hidden />
+            </button>
+          </Tooltip>
+          <Tooltip content="Align to centre (y = 120)">
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => alignTo("H", SCREEN_H / 2)}
+              disabled={!canAlignH}
+            >
+              <AlignCenterHorizontal size={14} aria-hidden />
+            </button>
+          </Tooltip>
+          <Tooltip content={`Align to bottom (y = ${SCREEN_H})`}>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => alignTo("H", SCREEN_H)}
+              disabled={!canAlignH}
+            >
+              <AlignEndHorizontal size={14} aria-hidden />
+            </button>
+          </Tooltip>
+          <span className="prop-alignment-sep" aria-hidden />
+          <Tooltip
+            content={
+              canDistH
+                ? "Distribute vertically (equal spacing)"
+                : "Distribute needs 3+ horizontal guides"
+            }
+          >
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => distribute("H")}
+              disabled={!canDistH}
+            >
+              <AlignVerticalDistributeCenter size={14} aria-hidden />
+            </button>
+          </Tooltip>
+        </div>
+      )}
+      {showV && (
+        <div
+          className="prop-alignment-row"
+          role="group"
+          aria-label="Vertical guides — align X"
+        >
+          <span className="prop-alignment-axis-label">{vertical.length}V</span>
+          <Tooltip content="Align to left (x = 0)">
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => alignTo("V", 0)}
+              disabled={!canAlignV}
+            >
+              <AlignStartVertical size={14} aria-hidden />
+            </button>
+          </Tooltip>
+          <Tooltip content="Align to centre (x = 120)">
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => alignTo("V", SCREEN_W / 2)}
+              disabled={!canAlignV}
+            >
+              <AlignCenterVertical size={14} aria-hidden />
+            </button>
+          </Tooltip>
+          <Tooltip content={`Align to right (x = ${SCREEN_W})`}>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => alignTo("V", SCREEN_W)}
+              disabled={!canAlignV}
+            >
+              <AlignEndVertical size={14} aria-hidden />
+            </button>
+          </Tooltip>
+          <span className="prop-alignment-sep" aria-hidden />
+          <Tooltip
+            content={
+              canDistV
+                ? "Distribute horizontally (equal spacing)"
+                : "Distribute needs 3+ vertical guides"
+            }
+          >
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => distribute("V")}
+              disabled={!canDistV}
+            >
+              <AlignHorizontalDistributeCenter size={14} aria-hidden />
+            </button>
+          </Tooltip>
+        </div>
+      )}
+    </>
+  );
+}
+
 function TypeCFields({ idx }: { idx: number }) {
   const project = useEditor((s) => s.project);
   const setLayerPosition = useEditor((s) => s.setLayerPosition);
@@ -776,10 +1032,12 @@ function MultiArrangeRow({ idxs }: { idxs: number[] }) {
 function PropertyPanel() {
   const project = useEditor((s) => s.project);
   const selectedIdxs = useEditor((s) => s.selectedIdxs);
+  const selectedGuideIds = useEditor((s) => s.selectedGuideIds);
   const assetDetailId = useEditor((s) => s.assetDetailId);
   const closeAssetDetail = useEditor((s) => s.closeAssetDetail);
   const setFaceNumber = useEditor((s) => s.setFaceNumber);
   const deleteSelectedLayers = useEditor((s) => s.deleteSelectedLayers);
+  const deleteSelectedGuides = useEditor((s) => s.deleteSelectedGuides);
 
   const onDeleteSelected = () => {
     const n = selectedIdxs.length;
@@ -799,6 +1057,26 @@ function PropertyPanel() {
   const layers = useMemo(() => (project ? listLayers(project) : []), [project]);
   const singleIdx = selectedIdxs.length === 1 ? selectedIdxs[0] : null;
   const layer = singleIdx !== null ? layers[singleIdx] : undefined;
+
+  const singleGuide = useMemo(() => {
+    if (!project) return null;
+    if (selectedGuideIds.length !== 1) return null;
+    return project.guides.find((g) => g.id === selectedGuideIds[0]) ?? null;
+  }, [project, selectedGuideIds]);
+
+  const onDeleteSelectedGuides = () => {
+    const n = selectedGuideIds.length;
+    if (n === 0) return;
+    if (
+      n > 1 &&
+      !window.confirm(
+        `Delete ${n} selected guide${n === 1 ? "" : "s"}? You can undo with Cmd/Ctrl+Z.`,
+      )
+    ) {
+      return;
+    }
+    deleteSelectedGuides();
+  };
 
   // Asset-detail mode takes over the sidebar entirely (replaces the layer
   // form). Only Type C carries the AssetSet model; FaceN ignores this branch.
@@ -851,7 +1129,7 @@ function PropertyPanel() {
           </p>
         )}
 
-        {selectedIdxs.length === 0 && (
+        {selectedIdxs.length === 0 && selectedGuideIds.length === 0 && (
           <p className="hint">
             Select a layer to edit its properties. Shift- or Cmd/Ctrl-click
             to multi-select, or drag on empty canvas to marquee-select.
@@ -874,6 +1152,37 @@ function PropertyPanel() {
             </button>
           </>
         )}
+
+        {singleGuide && (
+          <>
+            <h3>Guide</h3>
+            <GuideFields guide={singleGuide} />
+          </>
+        )}
+
+        {selectedGuideIds.length > 1 && project && (() => {
+          // Look up the GuideLine objects for the selected ids; defensively
+          // skip any that no longer exist (race against a delete from
+          // another surface).
+          const guides = selectedGuideIds
+            .map((id) => project.guides.find((g) => g.id === id))
+            .filter((g): g is GuideLine => g !== undefined);
+          if (guides.length === 0) return null;
+          return (
+            <>
+              <h3>{guides.length} guides selected</h3>
+              <MultiGuideArrangeRow guides={guides} />
+              <button
+                type="button"
+                className="counter ghost danger prop-delete"
+                onClick={onDeleteSelectedGuides}
+              >
+                <Trash2 size={14} aria-hidden />
+                Delete {guides.length} guides
+              </button>
+            </>
+          );
+        })()}
 
         {layer && project && (
           <>

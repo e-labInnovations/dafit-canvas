@@ -1,10 +1,14 @@
 import {
+  Eye,
+  EyeOff,
   GripVertical,
   Hash,
   Info,
   Layers,
+  Minus,
   Plus,
   RefreshCcw,
+  Ruler,
   Trash2,
   Type,
 } from 'lucide-react'
@@ -40,6 +44,8 @@ const FACEN_DEPENDENT_KINDS: FaceNDigitDependentKind[] = [
 function LayerList() {
   const project = useEditor((s) => s.project)
   const selectedIdxs = useEditor((s) => s.selectedIdxs)
+  const selectedGuideIds = useEditor((s) => s.selectedGuideIds)
+  const guidesVisible = useEditor((s) => s.guidesVisible)
   const assetDetailId = useEditor((s) => s.assetDetailId)
   const select = useEditor((s) => s.select)
   const toggleSelected = useEditor((s) => s.toggleSelected)
@@ -54,6 +60,11 @@ function LayerList() {
     (s) => s.insertFaceNDigitElementAction,
   )
   const setError = useEditor((s) => s.setError)
+  const addGuideAction = useEditor((s) => s.addGuideAction)
+  const selectGuide = useEditor((s) => s.selectGuide)
+  const toggleGuideSelected = useEditor((s) => s.toggleGuideSelected)
+  const setGuideVisibleAction = useEditor((s) => s.setGuideVisibleAction)
+  const setGuidesVisible = useEditor((s) => s.setGuidesVisible)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const insertBtnRef = useRef<HTMLButtonElement>(null)
@@ -542,6 +553,136 @@ function LayerList() {
               )
             })}
           </ul>
+        )}
+
+        {/* Design-aid guides — horizontal/vertical lines drawn over the
+            canvas. Not layers / not exported to the watch. */}
+        {project && (
+          <div className="guides-section">
+            <div className="guides-header">
+              <h4>
+                <Ruler size={12} aria-hidden /> Guides
+                {project.guides.length > 0 && (
+                  <span className="guides-count">
+                    {project.guides.length}
+                  </span>
+                )}
+              </h4>
+              <div className="guides-actions">
+                <Tooltip content="Add horizontal guide at y = 120">
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={() => addGuideAction('H', 120)}
+                    aria-label="Add horizontal guide"
+                  >
+                    <Minus size={12} aria-hidden />
+                  </button>
+                </Tooltip>
+                <Tooltip content="Add vertical guide at x = 120">
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={() => addGuideAction('V', 120)}
+                    aria-label="Add vertical guide"
+                  >
+                    <Minus
+                      size={12}
+                      aria-hidden
+                      style={{ transform: 'rotate(90deg)' }}
+                    />
+                  </button>
+                </Tooltip>
+                <Tooltip
+                  content={
+                    guidesVisible ? 'Hide all guides' : 'Show all guides'
+                  }
+                >
+                  <button
+                    type="button"
+                    className="icon-btn"
+                    onClick={() => setGuidesVisible(!guidesVisible)}
+                    aria-label={
+                      guidesVisible ? 'Hide all guides' : 'Show all guides'
+                    }
+                  >
+                    {guidesVisible ? (
+                      <Eye size={12} aria-hidden />
+                    ) : (
+                      <EyeOff size={12} aria-hidden />
+                    )}
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
+            {project.guides.length === 0 ? (
+              <p className="hint">
+                Add a horizontal or vertical guide to assist alignment. Drag
+                guides on the canvas to position them.
+              </p>
+            ) : (
+              <ul className="guides-list">
+                {project.guides.map((g) => {
+                  const selected = selectedGuideIds.includes(g.id)
+                  return (
+                    <li
+                      key={g.id}
+                      // The row itself is the click target — matches
+                      // .layer-row's pattern where the whole row selects
+                      // and the trailing icon-btn delegates a different
+                      // action. Using a real button still lives inside so
+                      // keyboard navigation reaches it.
+                      className={
+                        `guide-row` + (selected ? ' guide-row-selected' : '')
+                      }
+                    >
+                      <button
+                        type="button"
+                        className="guide-row-pick"
+                        aria-pressed={selected}
+                        // Shift/Cmd/Ctrl-click toggles membership for
+                        // multi-guide selection; plain click replaces.
+                        onClick={(e) => {
+                          if (e.shiftKey || e.metaKey || e.ctrlKey) {
+                            toggleGuideSelected(g.id)
+                          } else {
+                            selectGuide(g.id)
+                          }
+                        }}
+                      >
+                        <span className="guide-row-axis" aria-hidden>
+                          <span
+                            className={`guide-row-axis-icon ${g.axis === 'H' ? 'horizontal' : 'vertical'}`}
+                          />
+                        </span>
+                        <span className="guide-row-label">
+                          {g.axis === 'H' ? 'y' : 'x'} = {g.position}
+                        </span>
+                      </button>
+                      <Tooltip
+                        content={g.visible ? 'Hide guide' : 'Show guide'}
+                      >
+                        <button
+                          type="button"
+                          className="icon-btn"
+                          onClick={() =>
+                            setGuideVisibleAction(g.id, !g.visible)
+                          }
+                          aria-label={g.visible ? 'Hide guide' : 'Show guide'}
+                        >
+                          {g.visible ? (
+                            <Eye size={11} aria-hidden />
+                          ) : (
+                            <EyeOff size={11} aria-hidden />
+                          )}
+                        </button>
+                      </Tooltip>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
         )}
 
         {/* Type C asset library — reusable sets that one or more layers can
