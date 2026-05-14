@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { Hand, Pause, Play } from 'lucide-react'
 import FacePreview from '../dump/FacePreview'
 import FacePreviewN from '../dump/FacePreviewN'
+import Tooltip from '../Tooltip'
 import { useEditor } from '../../store/editorStore'
 import {
   computeLayerBbox,
@@ -170,6 +172,43 @@ function EditorCanvas() {
   const selectGuide = useEditor((s) => s.selectGuide)
   const toggleGuideSelected = useEditor((s) => s.toggleGuideSelected)
   const moveGuideAction = useEditor((s) => s.moveGuideAction)
+  const patchDummy = useEditor((s) => s.patchDummy)
+
+  const projectFormat = project?.format
+  const animationFrames =
+    project?.format === 'typeC' ? project.animationFrames : 0
+  // Find which animation types are actually present so the controls only
+  // surface what's relevant (tap-frame slider only when 0xf6 exists).
+  const hasAutoAnim =
+    project?.format === 'typeC' &&
+    project.layers.some((l) => l.type === 0xf7 || l.type === 0xf8)
+  const hasTapAnim =
+    project?.format === 'typeC' &&
+    project.layers.some((l) => l.type === 0xf6)
+  const hasAnyAnim = hasAutoAnim || hasTapAnim
+
+  // Local playback state — not in `dummy` because it only drives the
+  // timer, not the renderer. FPS defaults to 10 (corpus median), bounded
+  // [1, 30] to keep the slider sane.
+  const [playing, setPlaying] = useState(true)
+  const [fps, setFps] = useState(10)
+
+  // Auto-play tick for 0xf7 / 0xf8. Only runs when (a) there's an auto
+  // animation layer, (b) animationFrames >= 2, and (c) the user hasn't
+  // paused. Re-creates the interval when fps changes so the slider takes
+  // effect immediately.
+  useEffect(() => {
+    if (projectFormat !== 'typeC') return
+    if (!playing || !hasAutoAnim || animationFrames < 2) return
+    const intervalMs = Math.max(20, Math.round(1000 / fps))
+    const id = window.setInterval(() => {
+      patchDummy(
+        'animFrame',
+        (useEditor.getState().dummy.animFrame + 1) % animationFrames,
+      )
+    }, intervalMs)
+    return () => window.clearInterval(id)
+  }, [projectFormat, animationFrames, hasAutoAnim, playing, fps, patchDummy])
 
   const wrapperRef = useRef<HTMLDivElement>(null)
   const frameRef = useRef<HTMLDivElement>(null)
@@ -575,6 +614,99 @@ function EditorCanvas() {
             height: marquee.h * scale,
           }}
         />
+      )}
+
+      {hasAnyAnim && animationFrames >= 2 && (
+        <div className="anim-controls">
+          {hasAutoAnim && (
+            <>
+              <div className="anim-controls-row">
+                <Tooltip
+                  content={
+                    playing ? 'Pause auto animation' : 'Play auto animation'
+                  }
+                >
+                  <button
+                    type="button"
+                    className="counter ghost anim-controls-action"
+                    onClick={() => setPlaying((p) => !p)}
+                    aria-label={
+                      playing ? 'Pause animation' : 'Play animation'
+                    }
+                  >
+                    {playing ? (
+                      <Pause size={14} aria-hidden />
+                    ) : (
+                      <Play size={14} aria-hidden />
+                    )}
+                    {playing ? 'Pause' : 'Play'}
+                  </button>
+                </Tooltip>
+                <span className="anim-controls-label">Frame</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={animationFrames - 1}
+                  value={dummy.animFrame % animationFrames}
+                  onChange={(e) => {
+                    // Scrubbing implies the user wants to drive playback
+                    // manually; pause auto-play so the timer doesn't fight
+                    // the slider.
+                    if (playing) setPlaying(false)
+                    patchDummy('animFrame', parseInt(e.target.value, 10))
+                  }}
+                />
+                <span className="anim-controls-value">
+                  {dummy.animFrame % animationFrames} / {animationFrames - 1}
+                </span>
+              </div>
+              <div className="anim-controls-row">
+                <span className="anim-controls-action anim-controls-spacer" />
+                <span className="anim-controls-label">FPS</span>
+                <input
+                  type="range"
+                  min={1}
+                  max={30}
+                  value={fps}
+                  onChange={(e) => setFps(parseInt(e.target.value, 10))}
+                />
+                <span className="anim-controls-value">{fps}</span>
+              </div>
+            </>
+          )}
+          {hasTapAnim && (
+            <div className="anim-controls-row">
+              <Tooltip content="Advance TAP_TO_CHANGE by one frame (simulates a watch tap)">
+                <button
+                  type="button"
+                  className="counter ghost anim-controls-action"
+                  onClick={() =>
+                    patchDummy(
+                      'tapFrame',
+                      (dummy.tapFrame + 1) % animationFrames,
+                    )
+                  }
+                >
+                  <Hand size={14} aria-hidden />
+                  Tap
+                </button>
+              </Tooltip>
+              <span className="anim-controls-label">Tap frame</span>
+              <input
+                type="range"
+                min={0}
+                max={animationFrames - 1}
+                value={dummy.tapFrame % animationFrames}
+                onChange={(e) =>
+                  patchDummy('tapFrame', parseInt(e.target.value, 10))
+                }
+              />
+              <span className="anim-controls-value">
+                {dummy.tapFrame % animationFrames} / {animationFrames - 1}
+              </span>
+            </div>
+          )}
+        </div>
       )}
     </div>
   )

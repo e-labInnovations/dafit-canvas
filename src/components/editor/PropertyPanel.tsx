@@ -1036,6 +1036,9 @@ function PropertyPanel() {
   const assetDetailId = useEditor((s) => s.assetDetailId);
   const closeAssetDetail = useEditor((s) => s.closeAssetDetail);
   const setFaceNumber = useEditor((s) => s.setFaceNumber);
+  const setAnimationFramesAction = useEditor(
+    (s) => s.setAnimationFramesAction,
+  );
   const deleteSelectedLayers = useEditor((s) => s.deleteSelectedLayers);
   const deleteSelectedGuides = useEditor((s) => s.deleteSelectedGuides);
 
@@ -1115,12 +1118,45 @@ function PropertyPanel() {
       <div className="editor-pane-scroll">
         <h3>Project</h3>
         {project?.format === "typeC" && (
-          <NumField
-            label="faceNumber"
-            value={project.faceNumber}
-            onChange={(n) => setFaceNumber(n)}
-            min={1}
-          />
+          <>
+            <NumField
+              label="faceNumber"
+              value={project.faceNumber}
+              onChange={(n) => setFaceNumber(n)}
+              min={1}
+            />
+            <NumField
+              label="animationFrames"
+              value={project.animationFrames}
+              onChange={(n) => {
+                // Confirm before shrinking when there are filled frames at
+                // the tail end — truncating would lose painted pixels.
+                if (n < project.animationFrames) {
+                  const wouldLose = project.assetSets.some(
+                    (s) =>
+                      s.kind === "animation" &&
+                      s.slots.slice(n).some((slot) => slot.rgba !== null),
+                  );
+                  if (
+                    wouldLose &&
+                    !window.confirm(
+                      `Reduce animationFrames to ${n}? Frames ${n}+ are filled and will be dropped. You can undo with Cmd/Ctrl+Z.`,
+                    )
+                  ) {
+                    return;
+                  }
+                }
+                setAnimationFramesAction(n);
+              }}
+              min={0}
+              max={250}
+            />
+            <p className="hint">
+              Shared across all <code>0xf6 / 0xf7 / 0xf8</code> animation
+              sets. 0 = no animations. Changing this resizes existing
+              animation sets (preserves frame 0 first).
+            </p>
+          </>
         )}
         {project?.format === "faceN" && (
           <p className="hint">

@@ -2280,6 +2280,15 @@
   &:hover {
     color: var(--text-h);
   }
+
+  &:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+
+    &:hover {
+      color: var(--text);
+    }
+  }
 }
 
 /* "Use existing: NAME" row variant — keeps the existing indent but
@@ -2788,6 +2797,23 @@
   margin-left: 4px;
   padding: 2px 8px !important;
   font-size: 11px !important;
+}
+
+/* Animation-only "upload all frames at once" affordance, sits between the
+ * Slots header and the slot list. */
+.asset-detail-batch-import {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 10px;
+
+  .counter {
+    align-self: flex-start;
+  }
+
+  .hint {
+    margin: 0;
+  }
 }
 
 .asset-detail-actions {
@@ -5339,6 +5365,86 @@
   .counter {
     margin-bottom: 0;
   }
+}
+
+/* Animation playback controls below the canvas. Only rendered when the
+ * face has at least one 0xf6/0xf7/0xf8 layer and animationFrames >= 2.
+ * Auto and tap rows are independent so a face with only one kind of
+ * animation doesn't get a stub control for the other.
+ *
+ * Width tracks `.editor-canvas-stack` (which caps at 506px and centers
+ * with `margin: 0 auto`) so the panel reads as a continuation of the
+ * canvas frame instead of a free-floating widget. */
+.anim-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12px;
+  color: var(--text);
+  box-sizing: border-box;
+  width: 100%;
+}
+.anim-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: nowrap;
+
+  input[type='range'] {
+    flex: 1 1 auto;
+    min-width: 80px;
+    /* Drop default browser margin so the slider's track aligns with the
+     * label baseline. */
+    margin: 0;
+  }
+}
+/* Fixed-width "action" column at the start of every row. Real buttons
+ * (Play/Pause, Tap) use this class to lock their width; the spacer span
+ * is the empty-column variant for rows like FPS that don't carry an
+ * action — keeps the slider knob position consistent across rows. */
+.anim-controls-action {
+  flex: 0 0 auto;
+  width: 76px;
+  min-width: 76px;
+  justify-content: center;
+  /* Override the 24px bottom margin baked into `.counter` — inside the
+   * flex row that gap is what produces the visible brown gutter under
+   * the button. */
+  margin-bottom: 0;
+  /* Tighter vertical padding so the button height matches the slider
+   * row's natural height. */
+  padding-top: 4px;
+  padding-bottom: 4px;
+  font-size: 12px;
+}
+.anim-controls-spacer {
+  /* Invisible placeholder — same width as a real action button so the
+   * slider column starts at the same x-coordinate on every row. */
+  display: inline-block;
+}
+.anim-controls-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex: 0 0 auto;
+  width: 72px;
+  text-align: left;
+}
+.anim-controls-value {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-h);
+  flex: 0 0 auto;
+  width: 48px;
+  text-align: right;
 }
 
 /* Watch console — BLE playground page. Reuses .faces-header / .banner /

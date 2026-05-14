@@ -2,6 +2,7 @@ import { useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
+  Film,
   Pencil,
   Trash2,
   Type,
@@ -186,6 +187,7 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
   const renameAssetSetAction = useEditor((s) => s.renameAssetSetAction)
   const deleteAssetSetAction = useEditor((s) => s.deleteAssetSetAction)
   const resizeAssetSetAction = useEditor((s) => s.resizeAssetSetAction)
+  const replaceAssetAction = useEditor((s) => s.replaceAssetAction)
 
   const set: AssetSet | undefined =
     project?.format === 'typeC'
@@ -246,6 +248,70 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
     }
     const err = resizeAssetSetAction(set.id, w, h)
     if (err) setLocalError(err)
+  }
+
+  const onBatchImport = async () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.bmp,image/bmp'
+    input.multiple = true
+    input.onchange = async () => {
+      const files = Array.from(input.files ?? [])
+      if (files.length === 0) return
+      // Sort by filename so users can name 01.bmp, 02.bmp, … and get a
+      // deterministic frame order regardless of how the OS picker returns
+      // them. Locale-aware compare handles "frame_9" before "frame_10"
+      // correctly with the numeric option.
+      files.sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        }),
+      )
+      if (files.length > set.count) {
+        setLocalError(
+          `Selected ${files.length} files but the set only has ${set.count} slot${set.count === 1 ? '' : 's'}. Extra files were ignored. Bump animationFrames first if you want more.`,
+        )
+      }
+      let firstSize: { w: number; h: number } | null = null
+      const errors: string[] = []
+      for (let i = 0; i < Math.min(files.length, set.count); i++) {
+        try {
+          const bmp = await decodeBmpFile(files[i])
+          if (!firstSize) firstSize = { w: bmp.width, h: bmp.height }
+          if (
+            bmp.width !== firstSize.w ||
+            bmp.height !== firstSize.h
+          ) {
+            errors.push(
+              `${files[i].name}: ${bmp.width}×${bmp.height} doesn't match the first frame's ${firstSize.w}×${firstSize.h}`,
+            )
+            continue
+          }
+          // First file resizes the whole set (and clears other slots —
+          // handled by replaceAsset's clearOtherSlots), subsequent files
+          // fill slots with the matching dimensions.
+          const opts =
+            i === 0
+              ? { requireDimMatch: false, clearOtherSlots: true }
+              : { requireDimMatch: true }
+          const err = replaceAssetAction(
+            { tag: 'typeC-slot', setId: set.id, slotIdx: i },
+            bmp,
+            opts,
+          )
+          if (err) errors.push(`${files[i].name}: ${err}`)
+        } catch (err) {
+          errors.push(
+            `${files[i].name}: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+      }
+      if (errors.length > 0) {
+        setLocalError(`Some frames failed:\n${errors.join('\n')}`)
+      }
+    }
+    input.click()
   }
 
   const onSizeKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -415,6 +481,26 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
       </div>
 
       <h3 className="asset-detail-section-title">Slots</h3>
+      {set.kind === 'animation' && (
+        <div className="asset-detail-batch-import">
+          <Tooltip
+            content={`Upload up to ${set.count} BMPs at once — sorted by filename, mapped to frames 0…${set.count - 1}. First file resizes the set; the rest must match its dimensions.`}
+          >
+            <button
+              type="button"
+              className="counter ghost"
+              onClick={onBatchImport}
+            >
+              <Film size={14} aria-hidden />
+              Upload all frames at once
+            </button>
+          </Tooltip>
+          <p className="hint">
+            Name your frames in numeric order (e.g. <code>01.bmp</code>,
+            <code> 02.bmp</code>, …) so they land on the matching slots.
+          </p>
+        </div>
+      )}
       <ul className="asset-detail-slots">
         {set.slots.map((slot, i) => (
           <SlotRow

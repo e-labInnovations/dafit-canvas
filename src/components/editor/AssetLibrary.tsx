@@ -50,11 +50,28 @@ function AssetLibrary() {
     setDraftH(String(defaultH))
   }
 
+  /** Same idea as LayerList.ensureAnimFrames — animation sets have no
+   *  useful slot count without a project-wide frames value. Prompt for
+   *  it on the first animation-type create. */
+  const ensureAnimFrames = (type: number): boolean => {
+    if (type < 0xf6 || type > 0xf8) return true
+    if (project.animationFrames >= 2) return true
+    const ans = window.prompt(
+      'Animation needs a frame count. How many frames?\n(2–250, shared across all animation layers on this face)',
+      '10',
+    )
+    if (ans === null) return false
+    const n = parseInt(ans, 10)
+    if (!Number.isFinite(n) || n < 2 || n > 250) return false
+    return useEditor.getState().setAnimationFramesAction(n) === null
+  }
+
   const onCreateEmpty = (type: number) => {
     const w = parseInt(draftW, 10)
     const h = parseInt(draftH, 10)
     if (!Number.isFinite(w) || w < 1) return
     if (!Number.isFinite(h) || h < 1) return
+    if (!ensureAnimFrames(type)) return
     setShowNewMenu(false)
     setEmptyExpandedType(null)
     createAssetSetAction(type, undefined, { size: { w, h } })
@@ -65,6 +82,7 @@ function AssetLibrary() {
     name: string,
     glyphs: readonly string[],
   ) => {
+    if (!ensureAnimFrames(type)) return
     setShowNewMenu(false)
     createAssetSetAction(type)
     const updated = useEditor.getState().project

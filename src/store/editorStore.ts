@@ -25,6 +25,7 @@ import {
   replaceAsset,
   reorderLayer,
   resizeAssetSet,
+  setAnimationFrames,
   setAllGuidesVisible,
   setGuideVisible,
   setLayerXY,
@@ -247,6 +248,11 @@ type EditorState = {
 
   // Project-level mutations
   setFaceNumber: (n: number) => void
+  /** Set the project's `animationFrames` and resize every animation
+   *  asset set (0xf6/0xf7/0xf8) to the new slot count. Pads with empty
+   *  slots on grow; truncates higher-index slots on shrink. Returns the
+   *  error message on failure (e.g. out-of-range value). */
+  setAnimationFramesAction: (frames: number) => string | null
 }
 
 const errMsg = (err: unknown): string =>
@@ -875,5 +881,21 @@ export const useEditor = create<EditorState>((set, get) => {
       },
       'faceNumber',
     ),
+
+  setAnimationFramesAction: (frames) => {
+    const state = get()
+    if (!state.project || state.project.format !== 'typeC') {
+      return 'No Type C project loaded.'
+    }
+    try {
+      const next = setAnimationFrames(state.project, frames)
+      // One undo step — animation-frames changes are a project-wide
+      // structural edit, not a quick keystroke run, so no coalescing key.
+      mutate(() => ({ project: next }))
+      return null
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+  },
   }
 })

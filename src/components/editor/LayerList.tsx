@@ -103,6 +103,30 @@ function LayerList() {
     triggerPick(false)
   }
 
+  /** Animation layers (0xf6/0xf7/0xf8) need a project-wide frame count to
+   *  produce a useful asset set — without it the new set lands at 1 slot
+   *  (max(1, animationFrames)) and the user can't tell why. Prompt for
+   *  the count here, set it, and return whether the caller should proceed
+   *  with the insert. */
+  const ensureAnimFrames = (type: number): boolean => {
+    if (type < 0xf6 || type > 0xf8) return true
+    if (!project || project.format !== 'typeC') return true
+    if (project.animationFrames >= 2) return true
+    const ans = window.prompt(
+      'Animation needs a frame count. How many frames?\n(2–250, shared across all animation layers on this face)',
+      '10',
+    )
+    if (ans === null) return false
+    const n = parseInt(ans, 10)
+    if (!Number.isFinite(n) || n < 2 || n > 250) return false
+    const err = useEditor.getState().setAnimationFramesAction(n)
+    if (err) {
+      setError(err)
+      return false
+    }
+    return true
+  }
+
   const onInsertFaceN = (kind: FaceNInsertableKind, imageCount: number) => {
     setShowInsert(false)
     pendingRef.current = { mode: 'faceN', kind, imageCount }
@@ -207,6 +231,16 @@ function LayerList() {
                       if (list) list.push(k)
                       else byCat.set(cat, [k])
                     }
+                    // The MOYOUNG protocol stores `animationFrames` once per
+                    // face (one u16 in the header). All 0xf6/0xf7/0xf8 layers
+                    // share that count, so a face with two animation layers
+                    // can't have different lengths. The corpus shows every
+                    // animated face has exactly one — enforce that here.
+                    const hasAnimLayer =
+                      project.format === 'typeC' &&
+                      project.layers.some(
+                        (l) => l.type >= 0xf6 && l.type <= 0xf8,
+                      )
                     return INSERTABLE_CATEGORIES.flatMap((cat) => {
                       const items = byCat.get(cat.id)
                       if (!items || items.length === 0) return []
@@ -225,6 +259,8 @@ function LayerList() {
                             k.count > 1
                               ? compatibleSetsForType(project, k.type)
                               : []
+                          const isAnimType = k.type >= 0xf6 && k.type <= 0xf8
+                          const animBlocked = isAnimType && hasAnimLayer
                           return (
                             <div
                               key={`row-${k.type}`}
@@ -294,14 +330,29 @@ function LayerList() {
                               )}
                               {isExpanded && k.count === 1 && (
                                 <>
+                                  {animBlocked && (
+                                    <div className="insert-menu-help">
+                                      <p>
+                                        Only one animation layer per face — the
+                                        protocol stores a single
+                                        <code> animationFrames</code> at the
+                                        header level, shared across all
+                                        <code> 0xf6/0xf7/0xf8</code> layers.
+                                        Delete the existing animation layer
+                                        first if you want to replace it.
+                                      </p>
+                                    </div>
+                                  )}
                                   <button
                                     type="button"
                                     className="insert-menu-sub"
                                     onClick={() => {
+                                      if (!ensureAnimFrames(k.type)) return
                                       setShowInsert(false)
                                       setExpandedType(null)
                                       insertTypeCEmpty(k.type)
                                     }}
+                                    disabled={animBlocked}
                                   >
                                     ↳ Empty placeholder
                                   </button>
@@ -309,9 +360,11 @@ function LayerList() {
                                     type="button"
                                     className="insert-menu-sub"
                                     onClick={() => {
+                                      if (!ensureAnimFrames(k.type)) return
                                       setExpandedType(null)
                                       onInsertTypeC(k.type)
                                     }}
+                                    disabled={animBlocked}
                                   >
                                     ↳ Pick BMP file…
                                   </button>
@@ -323,6 +376,7 @@ function LayerList() {
                                     type="button"
                                     className="insert-menu-sub"
                                     onClick={() => {
+                                      if (!ensureAnimFrames(k.type)) return
                                       setShowInsert(false)
                                       setExpandedType(null)
                                       insertTypeCEmpty(k.type)

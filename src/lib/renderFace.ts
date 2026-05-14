@@ -18,6 +18,16 @@ export type DummyState = {
   battery: number // 0–100
   distance: number // tenths of km — e.g. 52 = 5.2 km, since digits are emitted with no decimal point
   btConnected: boolean
+  /** Current animation frame index for the live preview of auto-cycling
+   *  animations (0xf7 / 0xf8). Modulo'd against the FaceData entry's blob
+   *  count when drawing, so a 14-frame and a 21-frame animation cycle
+   *  correctly off the same counter. */
+  animFrame: number
+  /** Current frame index for TAP_TO_CHANGE (0xf6). Separate from
+   *  `animFrame` so the editor preview matches the real watch — on-watch
+   *  TAP_TO_CHANGE only advances when the user taps the face, not on a
+   *  timer. The editor's "Tap" button bumps this; auto-play does not. */
+  tapFrame: number
 }
 
 export const defaultDummy = (): DummyState => {
@@ -36,6 +46,8 @@ export const defaultDummy = (): DummyState => {
     battery: 85,
     distance: 52,
     btConnected: true,
+    animFrame: 0,
+    tapFrame: 0,
   }
 }
 
@@ -131,6 +143,7 @@ const drawElement = (
   centerX: number,
   centerY: number,
   use12h: boolean,
+  animationFrames: number,
 ): void => {
   // For TIME_H1/H2, present 12h hours when the face has AM/PM markers.
   // AM/PM checks themselves still use the raw 24h hour from `dummy`.
@@ -269,12 +282,26 @@ const drawElement = (
       drawHand(ctx, lookup, fd, dummy.second * 6, centerX, centerY)
       return
 
-    // ----- animations: just show the first frame -----
-    case 0xf6:
-    case 0xf7:
-    case 0xf8:
-      drawBlob(ctx, lookup, fd.idx, fd.x, fd.y)
+    // ----- animations -----
+    // 0xf6 TAP_TO_CHANGE only advances on a user tap on the real watch;
+    // the editor's tap button bumps dummy.tapFrame. 0xf7 / 0xf8 auto-
+    // cycle in firmware at a fixed (~10 fps) rate which we mirror via
+    // dummy.animFrame. `Math.max(1, …)` guards against animationFrames=0
+    // — the user may have an animation set in-progress before setting
+    // a real frame count.
+    case 0xf6: {
+      const n = Math.max(1, animationFrames)
+      const frame = ((dummy.tapFrame % n) + n) % n
+      drawBlob(ctx, lookup, fd.idx + frame, fd.x, fd.y)
       return
+    }
+    case 0xf7:
+    case 0xf8: {
+      const n = Math.max(1, animationFrames)
+      const frame = ((dummy.animFrame % n) + n) % n
+      drawBlob(ctx, lookup, fd.idx + frame, fd.x, fd.y)
+      return
+    }
 
     // ----- weather temp: skip (double-width unit chars complicate things) -----
     case 0xd7:
@@ -351,7 +378,16 @@ export const renderFace = (
   const centerY = height / 2
 
   for (let i = 0; i < header.dataCount; i++) {
-    drawElement(ctx, header.faceData[i], lookup, dummy, centerX, centerY, use12h)
+    drawElement(
+      ctx,
+      header.faceData[i],
+      lookup,
+      dummy,
+      centerX,
+      centerY,
+      use12h,
+      header.animationFrames,
+    )
   }
 
   return { width, height }

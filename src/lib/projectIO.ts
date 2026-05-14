@@ -1447,6 +1447,14 @@ export const TYPEC_INSERTABLE_TYPES: InsertableType[] = [
   { type: 0xa1, name: 'DIST_LOGO', count: 1, dim: { w: 14, h: 18 }, pos: { x: 110, y: 140 }, faces: 1 },
   { type: 0x81, name: 'HR_LOGO', count: 1, dim: { w: 16, h: 16 }, pos: { x: 110, y: 140 }, faces: 0 },
   { type: 0xce, name: 'BATT_IMG', count: 1, dim: { w: 32, h: 16 }, pos: { x: 105, y: 113 }, faces: 0 },
+  // Animation types. `count` is nominal — the actual slot count comes from
+  // `project.animationFrames`. We list a default of 1 for the type table;
+  // `createAssetSetForType` overrides via `blobCountForType` at create time.
+  // Default dim is the corpus median (~138×108 for ANIMATION, 156×108 for
+  // ANIMATION_F8, 96×96 for TAP_TO_CHANGE) — close enough for placeholders.
+  { type: 0xf6, name: 'TAP_TO_CHANGE', count: 1, dim: { w: 96, h: 96 }, pos: { x: 72, y: 72 }, faces: 5 },
+  { type: 0xf7, name: 'ANIMATION', count: 1, dim: { w: 138, h: 108 }, pos: { x: 51, y: 66 }, faces: 4 },
+  { type: 0xf8, name: 'ANIMATION_F8', count: 1, dim: { w: 156, h: 108 }, pos: { x: 42, y: 66 }, faces: 3 },
 ]
 
 /** Legacy view: types listed as "Single BMP" in the old Insert menu. Kept for
@@ -1472,6 +1480,7 @@ export type InsertableCategory =
   | 'battery'
   | 'weather'
   | 'connectivity'
+  | 'animation'
   | 'other'
 
 export const INSERTABLE_CATEGORIES: {
@@ -1490,6 +1499,7 @@ export const INSERTABLE_CATEGORIES: {
   { id: 'battery', label: 'Battery' },
   { id: 'weather', label: 'Weather' },
   { id: 'connectivity', label: 'Connectivity' },
+  { id: 'animation', label: 'Animation' },
   { id: 'other', label: 'Other' },
 ]
 
@@ -1781,6 +1791,25 @@ const INSERTABLE_META: Record<
     description:
       'Generic 10-digit set used by a handful of niche layouts. Purpose varies between firmware versions.',
   },
+
+  // Animations. Slot count is the project's `animationFrames` (not 1 like
+  // the FaceData table shows). All three share that one number — there's no
+  // way in the protocol to give different animations different lengths.
+  0xf6: {
+    category: 'animation',
+    description:
+      'Series of images that advances when the user taps the watch face. Set the project animationFrames first to choose how many frames live in the set.',
+  },
+  0xf7: {
+    category: 'animation',
+    description:
+      'Auto-cycling animation. Firmware plays the frames in a loop at a fixed (model-dependent) rate, typically ~10 fps.',
+  },
+  0xf8: {
+    category: 'animation',
+    description:
+      'Auto-cycling animation, alternate slot. Behaves like ANIMATION (0xf7); the two slots exist so a face can host two simultaneous animations.',
+  },
 }
 
 /** Look up the category + description for an insertable type. Returns
@@ -1844,12 +1873,19 @@ const DEFAULT_POSITION: Record<number, { x: number; y: number }> = (() => {
 
 const placeholderSlot = (): AssetSlot => ({ rgba: null })
 
-/** Create a new AssetSet sized for the given type. All slots start empty. */
+/** Create a new AssetSet sized for the given type. All slots start empty.
+ *
+ *  `animationFrames` must be passed in for the 0xf6/0xf7/0xf8 types since
+ *  their slot count comes from the project header (not the static type
+ *  table). Defaulting to 0 here would always produce 1-slot animation sets
+ *  regardless of what the user configured — the bug that prompted this
+ *  param. Non-animation types ignore the value. */
 const createAssetSetForType = (
   type: number,
   size?: { w: number; h: number },
+  animationFrames = 0,
 ): AssetSet => {
-  const count = blobCountForType(type, 0)
+  const count = blobCountForType(type, animationFrames)
   const cell = size ?? DEFAULT_GLYPH_CELL[type] ?? { w: 0, h: 0 }
   return {
     id: nextId('asset'),
@@ -1898,7 +1934,7 @@ export const insertTypeCLayer = (
     }
     setId = existing.id
   } else {
-    let newSet = createAssetSetForType(type)
+    let newSet = createAssetSetForType(type, undefined, project.animationFrames)
     if (name) newSet = { ...newSet, name }
     if (bitmaps && bitmaps.length > 0) {
       const expectedCount = blobCountForType(type, project.animationFrames)
@@ -1950,6 +1986,52 @@ export const compatibleSetsForType = (
  *  expected to either rebind a layer to the new set or insert a layer
  *  pointing at it. Used by the AssetLibrary "+ New" flow so users can build
  *  a reusable asset before placing it on the canvas. */
+/** Change the project's animationFrames. Resizes every animation asset
+ *  set (0xf6/0xf7/0xf8) to the new slot count: pads with empty slots on
+ *  grow, truncates from the end on shrink (preserving the lower-index
+ *  frames the user has already painted). The `compression` hint is kept
+ *  per slot, matching the contract of `resizeAssetSet`. */
+export const setAnimationFrames = (
+  project: TypeCProject,
+  frames: number,
+): TypeCProject => {
+  if (!Number.isFinite(frames) || frames < 0 || frames > 250) {
+    throw new Error(
+      `animationFrames must be in [0, 250]; got ${frames}.`,
+    )
+  }
+  if (project.animationFrames === frames) return project
+  // Build a set of asset-set ids that are bound to an animation layer.
+  // Orphan animation sets (no layer reference) also get resized for
+  // consistency — otherwise re-binding later would silently truncate.
+  const animSetIds = new Set<string>()
+  for (const l of project.layers) {
+    if (l.type >= 0xf6 && l.type <= 0xf8) animSetIds.add(l.assetSetId)
+  }
+  // Conservative: also resize any set whose kind is 'animation', regardless
+  // of layer binding.
+  for (const s of project.assetSets) {
+    if (s.kind === 'animation') animSetIds.add(s.id)
+  }
+  const target = Math.max(1, frames)
+  const nextSets = project.assetSets.map((s) => {
+    if (!animSetIds.has(s.id)) return s
+    if (s.slots.length === target) return s
+    if (s.slots.length < target) {
+      // Grow — append null-rgba slots. Preserve compression on the existing
+      // slots (the encoder default kicks in on the new ones).
+      const extra = Array.from({ length: target - s.slots.length }, () => ({
+        rgba: null as Uint8ClampedArray | null,
+      }))
+      return { ...s, count: target, slots: [...s.slots, ...extra] }
+    }
+    // Shrink — drop the highest-index slots. Frame 0 is the most important
+    // so trimming from the end is the right default.
+    return { ...s, count: target, slots: s.slots.slice(0, target) }
+  })
+  return { ...project, animationFrames: frames, assetSets: nextSets }
+}
+
 /** Change an asset set's per-slot dimensions. Pixel art doesn't scale
  *  cleanly, so every slot's `rgba` is cleared in the process — only the
  *  `compression` hint is preserved (the firmware-correctness contract on
@@ -1994,7 +2076,11 @@ export const createTypeCAssetSet = (
     size?: { w: number; h: number }
   } = {},
 ): { project: TypeCProject; setId: string } => {
-  let newSet = createAssetSetForType(type, options.size)
+  let newSet = createAssetSetForType(
+    type,
+    options.size,
+    project.animationFrames,
+  )
   if (options.name) newSet = { ...newSet, name: options.name }
   if (options.bitmaps && options.bitmaps.length > 0) {
     const expected = blobCountForType(type, project.animationFrames)
