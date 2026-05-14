@@ -1,5 +1,11 @@
 // Web Bluetooth client for MO YOUNG / DA FIT smartwatches.
 // Protocol mirrors https://github.com/david47k/dawfu (btleplug-based Rust CLI).
+// Generic command framing matches Gadgetbridge's MoyoungPacketOut.buildPacket:
+//   bytes 0..1: 0xFE 0xEA
+//   bytes 2..3: size (high byte: 0x20 + (len>>8), low byte: len & 0xff)
+//   byte 4    : opcode
+//   bytes 5+  : payload
+// No checksum. Notify char delivers replies in the same shape.
 
 const MOYOUNG_SERVICE = 0xfeea
 const SEND_CHAR = 0xfee2 // write w/o response — control commands
@@ -244,6 +250,59 @@ export class MoyoungWatch {
       new DataView(prep.buffer).setUint32(5, totalBytes, false)
       send.writeValueWithoutResponse(prep).catch(fail)
     })
+  }
+
+  /** Build and send a generic Moyoung control packet on the SEND char.
+   *  Payload defaults to empty (for opcodes like FIND_MY_WATCH that take
+   *  no arguments). Throws if not connected. */
+  async sendCommand(
+    opcode: number,
+    payload: Uint8Array = new Uint8Array(0),
+  ): Promise<void> {
+    const send = this.send
+    if (!send) throw new Error('Not connected.')
+    const total = payload.length + 5
+    const packet = new Uint8Array(total)
+    packet[0] = 0xfe
+    packet[1] = 0xea
+    // Use the MTU>20 size encoding (matches the existing upload flow:
+    // byte[2] = 0x20 + (len>>8), byte[3] = len & 0xff). On Web Bluetooth
+    // the negotiated MTU is generally well above 20 so this is the safe
+    // default; if a watch insists on MTU=20 framing it can be added later.
+    packet[2] = (0x20 + ((total >> 8) & 0xff)) & 0xff
+    packet[3] = total & 0xff
+    packet[4] = opcode & 0xff
+    packet.set(payload, 5)
+    await send.writeValueWithoutResponse(packet)
+  }
+
+  /** Subscribe to incoming control packets from the watch. The handler
+   *  receives the parsed (opcode, payload) pair so callers don't have to
+   *  re-decode the framing each time. `startNotifications` is called once
+   *  per subscriber — Web Bluetooth allows multiple listeners on the same
+   *  characteristic, and the upload flow uses its own listener in parallel
+   *  without conflict. Returns an unsubscribe function. */
+  async onPacket(
+    handler: (opcode: number, payload: Uint8Array) => void,
+  ): Promise<() => void> {
+    const notify = this.notify
+    if (!notify) throw new Error('Not connected.')
+    await notify.startNotifications()
+    const listener = (event: Event) => {
+      const target = event.target as BluetoothRemoteGATTCharacteristic
+      const view = target.value
+      if (!view) return
+      const data = new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
+      // Drop anything that doesn't carry the Moyoung header — upload acks
+      // share this framing too, but checking lets us ignore stray fragments
+      // from other Web Bluetooth clients on the same characteristic.
+      if (data.length < 5 || data[0] !== 0xfe || data[1] !== 0xea) return
+      handler(data[4], data.subarray(5))
+    }
+    notify.addEventListener('characteristicvaluechanged', listener)
+    return () => {
+      notify.removeEventListener('characteristicvaluechanged', listener)
+    }
   }
 
   async disconnect(): Promise<void> {

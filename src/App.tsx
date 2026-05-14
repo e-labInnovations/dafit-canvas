@@ -9,6 +9,7 @@ import Editor from './pages/Editor'
 import Dump from './pages/Dump'
 import Pack from './pages/Pack'
 import Docs from './pages/Docs'
+import WatchConsole from './pages/WatchConsole'
 import AboutModal from './components/AboutModal'
 import './App.css'
 
@@ -26,6 +27,7 @@ function App() {
         <NavLink to="/dump">Dump</NavLink>
         <NavLink to="/pack">Pack</NavLink>
         <NavLink to="/upload">Upload</NavLink>
+        <NavLink to="/console">Console</NavLink>
         <NavLink to="/docs">Docs</NavLink>
         <Tooltip content="About">
           <button
@@ -47,6 +49,7 @@ function App() {
         <Route path="/dump" element={<Dump />} />
         <Route path="/pack" element={<Pack />} />
         <Route path="/upload" element={<UploadWatchFace />} />
+        <Route path="/console" element={<WatchConsole />} />
         <Route path="/docs" element={<Docs />} />
       </Routes>
 
