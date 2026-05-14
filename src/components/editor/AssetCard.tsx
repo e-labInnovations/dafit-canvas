@@ -1,66 +1,28 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { ChevronDown, GitFork, Plus, Settings2 } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
 import { compatibleSetsForType, consumersOf } from '../../lib/projectIO'
+import { assetSetThumbDataUrl } from '../../lib/assetThumb'
+import Popover from '../Popover'
 import type { AssetSet, TypeCProject } from '../../types/face'
 
-/** Render an AssetSet's first non-empty slot as a data URL for thumbnails.
- *  Returns '' when the set has no decodable preview (empty multi-slot library,
- *  zero-dim, mismatched rgba — all rendered as the "empty" placeholder). */
-const thumbDataUrl = (set: AssetSet): string => {
-  const slot = set.slots.find((s) => s.rgba) ?? set.slots[0]
-  if (!slot?.rgba || set.width === 0 || set.height === 0) return ''
-  if (slot.rgba.length !== set.width * set.height * 4) return ''
-  const c = document.createElement('canvas')
-  c.width = set.width
-  c.height = set.height
-  const ctx = c.getContext('2d')
-  if (!ctx) return ''
-  const img = ctx.createImageData(set.width, set.height)
-  img.data.set(slot.rgba)
-  ctx.putImageData(img, 0, 0)
-  return c.toDataURL('image/png')
-}
-
-/** Compatible-asset popover. Mounts under the "Change" button. Renders every
- *  AssetSet whose blob-count matches the layer's type (so a rebind doesn't
- *  desync with the firmware's expected idx range). */
-function AssetPicker({
+/** Compatible-asset list rendered inside the rebind popover. Click-outside,
+ *  Esc, positioning, and ARIA are all handled by the parent `<Popover>` —
+ *  this is just the content (filter + list + "New" footer). */
+function AssetPickerContent({
   project,
   currentSetId,
   type,
   onSelect,
   onCreateNew,
-  onClose,
 }: {
   project: TypeCProject
   currentSetId: string
   type: number
   onSelect: (setId: string) => void
   onCreateNew: () => void
-  onClose: () => void
 }) {
   const [filter, setFilter] = useState('')
-  const ref = useRef<HTMLDivElement>(null)
-
-  // Click-outside + Escape close. Mouse-down (not click) so we still fire when
-  // the user mouses down outside and releases inside, which feels right for a
-  // popover dismiss.
-  useEffect(() => {
-    const onMouseDown = (e: MouseEvent) => {
-      if (!ref.current) return
-      if (!ref.current.contains(e.target as Node)) onClose()
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onMouseDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onMouseDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [onClose])
 
   const compatible = compatibleSetsForType(project, type).filter((s) => {
     if (!filter) return true
@@ -68,7 +30,7 @@ function AssetPicker({
   })
 
   return (
-    <div className="asset-picker" ref={ref} role="dialog" aria-label="Pick asset library">
+    <div className="asset-picker">
       <input
         type="text"
         className="asset-picker-filter"
@@ -82,7 +44,7 @@ function AssetPicker({
           <li className="asset-picker-empty">No compatible assets.</li>
         )}
         {compatible.map((s) => {
-          const url = thumbDataUrl(s)
+          const url = assetSetThumbDataUrl(s)
           const usage = consumersOf(project, s.id).length
           const isCurrent = s.id === currentSetId
           return (
@@ -144,10 +106,11 @@ function AssetCard({
   const createAssetSet = useEditor((s) => s.createAssetSetAction)
   const openAssetDetail = useEditor((s) => s.openAssetDetail)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const changeBtnRef = useRef<HTMLButtonElement>(null)
 
   const consumers = consumersOf(project, set.id)
   const shareCount = consumers.length - 1
-  const thumb = thumbDataUrl(set)
+  const thumb = assetSetThumbDataUrl(set)
   const layer = project.layers[layerIdx]
 
   const onSelect = (setId: string) => {
@@ -194,6 +157,7 @@ function AssetCard({
       </div>
       <div className="asset-card-actions">
         <button
+          ref={changeBtnRef}
           type="button"
           className="counter ghost"
           onClick={() => setPickerOpen((v) => !v)}
@@ -226,14 +190,21 @@ function AssetCard({
         )}
       </div>
       {pickerOpen && layer && (
-        <AssetPicker
-          project={project}
-          currentSetId={set.id}
-          type={layer.type}
-          onSelect={onSelect}
-          onCreateNew={onCreateNew}
+        <Popover
+          anchorRef={changeBtnRef}
           onClose={() => setPickerOpen(false)}
-        />
+          placement="bottom-start"
+          role="dialog"
+          ariaLabel="Pick asset library"
+        >
+          <AssetPickerContent
+            project={project}
+            currentSetId={set.id}
+            type={layer.type}
+            onSelect={onSelect}
+            onCreateNew={onCreateNew}
+          />
+        </Popover>
       )}
     </div>
   )

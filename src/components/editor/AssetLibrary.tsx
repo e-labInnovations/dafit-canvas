@@ -1,99 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useRef, useState } from 'react'
 import { FileInput, Plus } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
 import { TYPEC_FONT_INSERTABLE, consumersOf } from '../../lib/projectIO'
+import { assetSetThumbDataUrl } from '../../lib/assetThumb'
 import FontGenerator, { type FontTarget } from './FontGenerator'
 import ImportAssetsDialog from './ImportAssetsDialog'
-import type { AssetSet } from '../../types/face'
-
-/** Renders children into document.body, positioned just below the anchor.
- *  Used so popovers can escape a scrolling parent (`.editor-pane-scroll`
- *  clips overflow-x even though only overflow-y was set to auto). The
- *  position is recomputed on scroll/resize so the popover tracks its
- *  anchor while open. Click-outside (and Esc) closes via `onClose`. */
-function PortalPopover({
-  anchorRef,
-  onClose,
-  children,
-}: {
-  anchorRef: React.RefObject<HTMLElement | null>
-  onClose: () => void
-  children: React.ReactNode
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null)
-
-  useLayoutEffect(() => {
-    const update = () => {
-      const a = anchorRef.current
-      if (!a) return
-      const r = a.getBoundingClientRect()
-      // Align the popover's right edge with the trigger's right edge so it
-      // grows leftward — fits naturally next to a right-aligned button.
-      setPos({
-        top: r.bottom + 4,
-        right: window.innerWidth - r.right,
-      })
-    }
-    update()
-    window.addEventListener('resize', update)
-    window.addEventListener('scroll', update, true)
-    return () => {
-      window.removeEventListener('resize', update)
-      window.removeEventListener('scroll', update, true)
-    }
-  }, [anchorRef])
-
-  useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      const a = anchorRef.current
-      const p = ref.current
-      if (!p) return
-      // The anchor handles its own click — only outside clicks close.
-      if (a && a.contains(e.target as Node)) return
-      if (p.contains(e.target as Node)) return
-      onClose()
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [anchorRef, onClose])
-
-  if (!pos) return null
-  return createPortal(
-    <div
-      ref={ref}
-      className="portal-popover"
-      style={{ top: pos.top, right: pos.right }}
-    >
-      {children}
-    </div>,
-    document.body,
-  )
-}
-
-const thumbDataUrl = (set: AssetSet): string => {
-  const slot = set.slots.find((s) => s.rgba)
-  if (!slot?.rgba || set.width === 0 || set.height === 0) return ''
-  const c = document.createElement('canvas')
-  c.width = set.width
-  c.height = set.height
-  const ctx = c.getContext('2d')
-  if (!ctx) return ''
-  const expected = set.width * set.height * 4
-  if (slot.rgba.length !== expected) return ''
-  const img = ctx.createImageData(set.width, set.height)
-  img.data.set(slot.rgba)
-  ctx.putImageData(img, 0, 0)
-  return c.toDataURL('image/png')
-}
+import Popover from '../Popover'
 
 function AssetLibrary() {
   const project = useEditor((s) => s.project)
@@ -161,11 +73,15 @@ function AssetLibrary() {
           New
         </button>
         {showNewMenu && (
-          <PortalPopover
+          <Popover
             anchorRef={newBtnRef}
             onClose={() => setShowNewMenu(false)}
+            placement="bottom-end"
+            role="menu"
+            ariaLabel="Create new asset set"
+            className="insert-menu"
           >
-            <div className="editor-new-menu insert-menu" role="menu">
+            <div className="editor-new-menu insert-menu" role="presentation">
               <div className="insert-menu-section">Empty set</div>
               {TYPEC_FONT_INSERTABLE.map((k) => (
                 <button
@@ -191,7 +107,7 @@ function AssetLibrary() {
                 </button>
               ))}
             </div>
-          </PortalPopover>
+          </Popover>
         )}
       </div>
 
@@ -205,7 +121,7 @@ function AssetLibrary() {
       <ul>
         {project.assetSets.map((set) => {
           const consumers = consumersOf(project, set.id)
-          const url = thumbDataUrl(set)
+          const url = assetSetThumbDataUrl(set)
           const isOrphan = consumers.length === 0
           const isCurrent = set.id === assetDetailId
           return (

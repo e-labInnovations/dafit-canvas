@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import EditorCanvas from "../components/editor/EditorCanvas";
 import LayerList from "../components/editor/LayerList";
+import Popover from "../components/Popover";
 import PropertyPanel from "../components/editor/PropertyPanel";
 import UploadDialog from "../components/editor/UploadDialog";
 import { useEditor } from "../store/editorStore";
@@ -54,6 +55,7 @@ function Editor() {
   const canRedo = useEditor((s) => s.future.length > 0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const newBtnRef = useRef<HTMLButtonElement>(null);
   const [showNewMenu, setShowNewMenu] = useState(false);
   const [importing, setImporting] = useState(false);
   const [uploadBytes, setUploadBytes] = useState<Uint8Array | null>(null);
@@ -215,17 +217,26 @@ function Editor() {
               <Redo2 size={14} aria-hidden />
             </button>
           </div>
-          <div className="editor-new-wrap">
-            <button
-              type="button"
-              className="counter ghost"
-              onClick={() => setShowNewMenu((v) => !v)}
+          <button
+            ref={newBtnRef}
+            type="button"
+            className="counter ghost"
+            onClick={() => setShowNewMenu((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={showNewMenu}
+          >
+            <FilePlus2 size={14} aria-hidden />
+            New
+          </button>
+          {showNewMenu && (
+            <Popover
+              anchorRef={newBtnRef}
+              onClose={() => setShowNewMenu(false)}
+              placement="bottom-start"
+              role="menu"
+              ariaLabel="New project format"
             >
-              <FilePlus2 size={14} aria-hidden />
-              New
-            </button>
-            {showNewMenu && (
-              <div className="editor-new-menu" role="menu">
+              <div className="editor-new-menu" role="presentation">
                 <button type="button" onClick={() => onNew("typeC")}>
                   Type C
                 </button>
@@ -233,8 +244,8 @@ function Editor() {
                   FaceN (coming soon)
                 </button>
               </div>
-            )}
-          </div>
+            </Popover>
+          )}
           <button
             type="button"
             className="counter ghost"

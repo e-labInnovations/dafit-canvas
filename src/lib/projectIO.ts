@@ -1425,6 +1425,340 @@ export const TYPEC_INSERTABLE = TYPEC_INSERTABLE_TYPES.filter((k) => k.count ===
   (k) => ({ type: k.type, name: k.name }),
 )
 
+/** Grouping for the Insert menu — purely UI metadata; the firmware doesn't
+ *  care about these labels. Order here is the order the sections render in
+ *  the popover (frequently-used first). */
+export type InsertableCategory =
+  | 'background'
+  | 'time-digits'
+  | 'time-other'
+  | 'date'
+  | 'hands'
+  | 'steps'
+  | 'heart-rate'
+  | 'calories'
+  | 'distance'
+  | 'battery'
+  | 'weather'
+  | 'connectivity'
+  | 'other'
+
+export const INSERTABLE_CATEGORIES: {
+  id: InsertableCategory
+  label: string
+}[] = [
+  { id: 'background', label: 'Background' },
+  { id: 'time-digits', label: 'Time digits' },
+  { id: 'time-other', label: 'Time labels' },
+  { id: 'date', label: 'Date' },
+  { id: 'hands', label: 'Analog hands' },
+  { id: 'steps', label: 'Steps' },
+  { id: 'heart-rate', label: 'Heart rate' },
+  { id: 'calories', label: 'Calories' },
+  { id: 'distance', label: 'Distance' },
+  { id: 'battery', label: 'Battery' },
+  { id: 'weather', label: 'Weather' },
+  { id: 'connectivity', label: 'Connectivity' },
+  { id: 'other', label: 'Other' },
+]
+
+/** Per-type UI metadata: which category section to render under and a
+ *  short description for the help popover. Keep descriptions to 1–2
+ *  sentences — the help panel also shows the slot count and type-code
+ *  separately, so the prose is just the "what does this do" hint. */
+const INSERTABLE_META: Record<
+  number,
+  { category: InsertableCategory; description: string }
+> = {
+  // Background / canvas
+  0x01: {
+    category: 'background',
+    description:
+      'Full-screen 240×240 wallpaper, painted before every other layer. Most faces have exactly one.',
+  },
+  0x00: {
+    category: 'background',
+    description:
+      'Ten horizontal 240×24 strips that some firmware stitches together as a tall background. Rarely used.',
+  },
+
+  // Time — digits
+  0x40: {
+    category: 'time-digits',
+    description:
+      'Tens digit of the hour (the "1" in "12:34"). One of four digital-clock slots — usually shares its asset library with the other time digits.',
+  },
+  0x41: {
+    category: 'time-digits',
+    description:
+      'Units digit of the hour (the "2" in "12:34"). Usually shares its asset library with the other time digits.',
+  },
+  0x43: {
+    category: 'time-digits',
+    description:
+      'Tens digit of the minute (the "3" in "12:34").',
+  },
+  0x44: {
+    category: 'time-digits',
+    description:
+      'Units digit of the minute (the "4" in "12:34").',
+  },
+  0x47: {
+    category: 'time-digits',
+    description:
+      'First pair of generic clock digits, used by some firmware layouts as an alternative to 0x40/0x41.',
+  },
+  0x48: {
+    category: 'time-digits',
+    description:
+      'Second pair of generic clock digits, alternative to 0x43/0x44.',
+  },
+
+  // Time — labels
+  0x45: {
+    category: 'time-other',
+    description:
+      'The "AM" label, shown only before noon. Single bitmap — typically the text "AM".',
+  },
+  0x46: {
+    category: 'time-other',
+    description:
+      'The "PM" label, shown only at or after noon.',
+  },
+  0xf0: {
+    category: 'time-other',
+    description:
+      'Colon (or other separator) between hours and minutes. Single bitmap.',
+  },
+
+  // Date
+  0x10: {
+    category: 'date',
+    description:
+      'Twelve month-name bitmaps (Jan, Feb, …, Dec). One slot per month.',
+  },
+  0x11: {
+    category: 'date',
+    description:
+      'Numeric month as 10 digit bitmaps. Two cells are rendered for values 1–12.',
+  },
+  0x12: {
+    category: 'date',
+    description:
+      'Four-digit year as 10 digit bitmaps. Some firmware only renders the last two digits.',
+  },
+  0x30: {
+    category: 'date',
+    description:
+      'Day of the month as 10 digit bitmaps (1–31). Two cells.',
+  },
+  0x60: {
+    category: 'date',
+    description:
+      'Seven day-of-week bitmaps (Sun, Mon, …, Sat).',
+  },
+  0x6b: {
+    category: 'date',
+    description:
+      'Alternate "month number" digit set, used when 0x11 isn’t available.',
+  },
+  0x6c: {
+    category: 'date',
+    description:
+      'Alternate "day of month" digit set, used when 0x30 isn’t available.',
+  },
+
+  // Hands — analog
+  0xf1: {
+    category: 'hands',
+    description:
+      'Analog hour hand. Single bitmap rotated by firmware based on the current hour.',
+  },
+  0xf2: {
+    category: 'hands',
+    description:
+      'Analog minute hand. Single bitmap rotated by firmware.',
+  },
+  0xf3: {
+    category: 'hands',
+    description:
+      'Analog seconds hand. Single bitmap rotated by firmware.',
+  },
+  0xf4: {
+    category: 'hands',
+    description:
+      'Upper pin cap painted on top of the hour/minute hands at the dial center.',
+  },
+  0xf5: {
+    category: 'hands',
+    description:
+      'Lower pin cap (2 frames). Sits beneath the seconds hand at the dial center.',
+  },
+
+  // Steps
+  0x63: {
+    category: 'steps',
+    description: 'Step counter, center-aligned digit set.',
+  },
+  0x72: {
+    category: 'steps',
+    description: 'Step counter, basic left-aligned digit set.',
+  },
+  0x73: {
+    category: 'steps',
+    description: 'Step counter, basic center-aligned digit set.',
+  },
+  0x74: {
+    category: 'steps',
+    description: 'Step counter, basic right-aligned digit set.',
+  },
+  0x70: {
+    category: 'steps',
+    description:
+      'Step-goal progress bar — 11 frames from 0% to 100% in 10% increments.',
+  },
+  0x71: {
+    category: 'steps',
+    description: 'Static steps icon (logo).',
+  },
+
+  // Heart rate
+  0x66: {
+    category: 'heart-rate',
+    description: 'Heart-rate digits, center-aligned.',
+  },
+  0x82: {
+    category: 'heart-rate',
+    description: 'Heart-rate digits, basic left-aligned.',
+  },
+  0x83: {
+    category: 'heart-rate',
+    description: 'Heart-rate digits, basic center-aligned.',
+  },
+  0x84: {
+    category: 'heart-rate',
+    description: 'Heart-rate digits, basic right-aligned.',
+  },
+  0x80: {
+    category: 'heart-rate',
+    description:
+      'Heart-rate zone progress bar — 11 frames from low to high zone.',
+  },
+  0x81: {
+    category: 'heart-rate',
+    description: 'Static heart icon (logo).',
+  },
+
+  // Calories
+  0x92: {
+    category: 'calories',
+    description: 'Calorie digits, basic left-aligned.',
+  },
+  0x93: {
+    category: 'calories',
+    description: 'Calorie digits, basic center-aligned.',
+  },
+  0x94: {
+    category: 'calories',
+    description: 'Calorie digits, basic right-aligned.',
+  },
+  0x90: {
+    category: 'calories',
+    description: 'Calorie-goal progress bar — 11 frames.',
+  },
+  0x91: {
+    category: 'calories',
+    description: 'Static calorie icon (logo).',
+  },
+
+  // Distance
+  0xa1: {
+    category: 'distance',
+    description: 'Static distance icon (logo).',
+  },
+  0xa3: {
+    category: 'distance',
+    description: 'Distance digits, center-aligned.',
+  },
+  0xa4: {
+    category: 'distance',
+    description: 'Distance digits, right-aligned.',
+  },
+  0xa5: {
+    category: 'distance',
+    description:
+      '"KM" unit label, shown when the watch is set to metric distance.',
+  },
+  0xa6: {
+    category: 'distance',
+    description:
+      '"MI" unit label, shown when the watch is set to imperial distance.',
+  },
+
+  // Battery
+  0xce: {
+    category: 'battery',
+    description: 'Single battery image (legacy variant).',
+  },
+  0xd1: {
+    category: 'battery',
+    description: 'Single battery image, variant C.',
+  },
+  0xda: {
+    category: 'battery',
+    description:
+      'Battery fill animation — 11 frames from empty (0%) to full (100%).',
+  },
+  0xd2: {
+    category: 'battery',
+    description: 'Battery-percentage digits, left-aligned.',
+  },
+  0xd3: {
+    category: 'battery',
+    description: 'Battery-percentage digits, center-aligned.',
+  },
+  0xd4: {
+    category: 'battery',
+    description: 'Battery-percentage digits, right-aligned.',
+  },
+
+  // Weather
+  0xd6: {
+    category: 'weather',
+    description:
+      'Weather icon set — 9 frames for sun, cloud, rain, snow, etc.',
+  },
+  0xd8: {
+    category: 'weather',
+    description:
+      'Weather temperature, 13 digit slots (includes "-", digits, and a "°" / unit glyph).',
+  },
+
+  // Connectivity
+  0xc0: {
+    category: 'connectivity',
+    description: 'Bluetooth-connected icon — shown when paired.',
+  },
+  0xc1: {
+    category: 'connectivity',
+    description: 'Bluetooth-disconnected icon — shown when unpaired.',
+  },
+
+  // Other
+  0x69: {
+    category: 'other',
+    description:
+      'Generic 10-digit set used by a handful of niche layouts. Purpose varies between firmware versions.',
+  },
+}
+
+/** Look up the category + description for an insertable type. Returns
+ *  `'other'` and an empty description for types not in the meta table. */
+export const insertableMeta = (
+  type: number,
+): { category: InsertableCategory; description: string } =>
+  INSERTABLE_META[type] ?? { category: 'other', description: '' }
+
 /** Legacy view: same data, filtered to multi-blob font-able types (count > 1
  *  and a `glyphs` array). FontGenerator and AssetDetailModal still consume
  *  this shape. */

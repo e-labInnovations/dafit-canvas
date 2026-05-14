@@ -1,6 +1,7 @@
 import {
   GripVertical,
   Hash,
+  Info,
   Layers,
   Plus,
   RefreshCcw,
@@ -11,15 +12,20 @@ import { useMemo, useRef, useState } from 'react'
 import { useEditor } from '../../store/editorStore'
 import {
   FACEN_INSERTABLE,
+  INSERTABLE_CATEGORIES,
   TYPEC_INSERTABLE_TYPES,
   compatibleSetsForType,
   decodeBmpFile,
+  insertableMeta,
   listLayers,
   type FaceNDigitDependentKind,
   type FaceNInsertableKind,
+  type InsertableCategory,
 } from '../../lib/projectIO'
 import AssetLibrary from './AssetLibrary'
 import FontGenerator, { type FontTarget } from './FontGenerator'
+import Popover from '../Popover'
+import { assetSetThumbDataUrl } from '../../lib/assetThumb'
 
 const FACEN_DEPENDENT_KINDS: FaceNDigitDependentKind[] = [
   'TimeNum',
@@ -49,6 +55,7 @@ function LayerList() {
   const setError = useEditor((s) => s.setError)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const insertBtnRef = useRef<HTMLButtonElement>(null)
   const pendingRef = useRef<
     | { mode: 'typeC'; type: number }
     | { mode: 'faceN'; kind: FaceNInsertableKind; imageCount: number }
@@ -56,6 +63,7 @@ function LayerList() {
   >(null)
   const [showInsert, setShowInsert] = useState(false)
   const [expandedType, setExpandedType] = useState<number | null>(null)
+  const [helpType, setHelpType] = useState<number | null>(null)
   const [insertFilter, setInsertFilter] = useState('')
   const [fontTarget, setFontTarget] = useState<FontTarget | null>(null)
   // Drag-to-reorder state. `dragIdx` is the layer being dragged
@@ -136,18 +144,28 @@ function LayerList() {
     <aside className="editor-pane editor-layers">
       <div className="layer-add-bar">
         <h3>Layers</h3>
-        <div className="editor-new-wrap">
-          <button
-            type="button"
-            className="counter ghost"
-            onClick={() => setShowInsert((v) => !v)}
-            disabled={!project}
+        <button
+          ref={insertBtnRef}
+          type="button"
+          className="counter ghost"
+          onClick={() => setShowInsert((v) => !v)}
+          disabled={!project}
+          aria-haspopup="menu"
+          aria-expanded={showInsert}
+        >
+          <Plus size={14} aria-hidden />
+          Insert
+        </button>
+        {showInsert && project && (
+          <Popover
+            anchorRef={insertBtnRef}
+            onClose={() => setShowInsert(false)}
+            placement="bottom-end"
+            role="menu"
+            ariaLabel="Insert a layer"
+            className="insert-menu"
           >
-            <Plus size={14} aria-hidden />
-            Insert
-          </button>
-          {showInsert && project && (
-            <div className="editor-new-menu insert-menu" role="menu">
+            <div className="editor-new-menu insert-menu" role="presentation">
               {project.format === 'typeC' && (
                 <>
                   <input
@@ -158,91 +176,199 @@ function LayerList() {
                     onChange={(e) => setInsertFilter(e.target.value)}
                     autoFocus
                   />
-                  {TYPEC_INSERTABLE_TYPES.filter((k) => {
-                    if (!insertFilter) return true
-                    const q = insertFilter.toLowerCase()
-                    return (
-                      k.name.toLowerCase().includes(q) ||
-                      `0x${k.type.toString(16).padStart(2, '0')}`.includes(q)
-                    )
-                  }).map((k) => {
-                    const isExpanded = expandedType === k.type
-                    const sharable =
-                      k.count > 1 ? compatibleSetsForType(project, k.type) : []
-                    return (
-                      <div key={`row-${k.type}`} className="insert-menu-multi">
-                        <button
-                          type="button"
-                          className={isExpanded ? 'insert-menu-row-active' : ''}
-                          onClick={() =>
-                            setExpandedType(isExpanded ? null : k.type)
-                          }
+                  {(() => {
+                    // Apply the filter once, then bucket the survivors by
+                    // category. Empty categories are skipped so the user
+                    // doesn't see a sea of dangling headers when filtering.
+                    const filtered = TYPEC_INSERTABLE_TYPES.filter((k) => {
+                      if (!insertFilter) return true
+                      const q = insertFilter.toLowerCase()
+                      return (
+                        k.name.toLowerCase().includes(q) ||
+                        `0x${k.type.toString(16).padStart(2, '0')}`.includes(q)
+                      )
+                    })
+                    const byCat = new Map<InsertableCategory, typeof filtered>()
+                    for (const k of filtered) {
+                      const cat = insertableMeta(k.type).category
+                      const list = byCat.get(cat)
+                      if (list) list.push(k)
+                      else byCat.set(cat, [k])
+                    }
+                    return INSERTABLE_CATEGORIES.flatMap((cat) => {
+                      const items = byCat.get(cat.id)
+                      if (!items || items.length === 0) return []
+                      return [
+                        <div
+                          key={`cat-${cat.id}`}
+                          className="insert-menu-section"
                         >
-                          {k.name}
-                          <span className="insert-menu-tag">{k.count}</span>
-                        </button>
-                        {isExpanded && k.count === 1 && (
-                          <>
-                            <button
-                              type="button"
-                              className="insert-menu-sub"
-                              onClick={() => {
-                                setShowInsert(false)
-                                setExpandedType(null)
-                                insertTypeCEmpty(k.type)
-                              }}
+                          {cat.label}
+                        </div>,
+                        ...items.map((k) => {
+                          const isExpanded = expandedType === k.type
+                          const isHelpOpen = helpType === k.type
+                          const meta = insertableMeta(k.type)
+                          const sharable =
+                            k.count > 1
+                              ? compatibleSetsForType(project, k.type)
+                              : []
+                          return (
+                            <div
+                              key={`row-${k.type}`}
+                              className="insert-menu-multi"
                             >
-                              ↳ Empty placeholder
-                            </button>
-                            <button
-                              type="button"
-                              className="insert-menu-sub"
-                              onClick={() => {
-                                setExpandedType(null)
-                                onInsertTypeC(k.type)
-                              }}
-                            >
-                              ↳ Pick BMP file…
-                            </button>
-                          </>
-                        )}
-                        {isExpanded && k.count > 1 && (
-                          <>
-                            <button
-                              type="button"
-                              className="insert-menu-sub"
-                              onClick={() => {
-                                setShowInsert(false)
-                                setExpandedType(null)
-                                insertTypeCEmpty(k.type)
-                              }}
-                            >
-                              ↳ New empty library ({k.count} slots)
-                            </button>
-                            {sharable.map((set) => (
-                              <button
-                                key={`share-${set.id}`}
-                                type="button"
-                                className="insert-menu-sub"
-                                onClick={() => {
-                                  setShowInsert(false)
-                                  setExpandedType(null)
-                                  insertTypeCShared(k.type, set.id)
-                                }}
-                              >
-                                ↳ Use existing: <strong>{set.name}</strong>
-                              </button>
-                            ))}
-                          </>
-                        )}
-                      </div>
-                    )
-                  })}
+                              <div className="insert-menu-row">
+                                <button
+                                  type="button"
+                                  className={
+                                    `insert-menu-name` +
+                                    (isExpanded ? ' insert-menu-row-active' : '')
+                                  }
+                                  onClick={() =>
+                                    setExpandedType(isExpanded ? null : k.type)
+                                  }
+                                >
+                                  {k.name}
+                                  <span className="insert-menu-tag">
+                                    {k.count}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  className={
+                                    `insert-menu-info` +
+                                    (isHelpOpen ? ' active' : '')
+                                  }
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setHelpType(isHelpOpen ? null : k.type)
+                                  }}
+                                  aria-label={`What is ${k.name}?`}
+                                  title={`What is ${k.name}?`}
+                                >
+                                  <Info size={12} aria-hidden />
+                                </button>
+                              </div>
+                              {isHelpOpen && (
+                                <div className="insert-menu-help">
+                                  {meta.description ? (
+                                    <p>{meta.description}</p>
+                                  ) : (
+                                    <p className="hint">
+                                      No description yet for this type.
+                                    </p>
+                                  )}
+                                  <dl className="insert-menu-help-meta">
+                                    <dt>Type code</dt>
+                                    <dd>
+                                      <code>
+                                        0x{k.type.toString(16).padStart(2, '0')}
+                                      </code>
+                                    </dd>
+                                    <dt>Slots</dt>
+                                    <dd>{k.count}</dd>
+                                    <dt>Default size</dt>
+                                    <dd>
+                                      {k.dim.w}×{k.dim.h}
+                                    </dd>
+                                    <dt>Seen in</dt>
+                                    <dd>
+                                      {k.faces} of 387 corpus faces
+                                    </dd>
+                                  </dl>
+                                </div>
+                              )}
+                              {isExpanded && k.count === 1 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="insert-menu-sub"
+                                    onClick={() => {
+                                      setShowInsert(false)
+                                      setExpandedType(null)
+                                      insertTypeCEmpty(k.type)
+                                    }}
+                                  >
+                                    ↳ Empty placeholder
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="insert-menu-sub"
+                                    onClick={() => {
+                                      setExpandedType(null)
+                                      onInsertTypeC(k.type)
+                                    }}
+                                  >
+                                    ↳ Pick BMP file…
+                                  </button>
+                                </>
+                              )}
+                              {isExpanded && k.count > 1 && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="insert-menu-sub"
+                                    onClick={() => {
+                                      setShowInsert(false)
+                                      setExpandedType(null)
+                                      insertTypeCEmpty(k.type)
+                                    }}
+                                  >
+                                    ↳ New empty library ({k.count} slots)
+                                  </button>
+                                  {sharable.map((set) => {
+                                    const thumb = assetSetThumbDataUrl(set)
+                                    return (
+                                      <button
+                                        key={`share-${set.id}`}
+                                        type="button"
+                                        className="insert-menu-sub insert-menu-share"
+                                        onClick={() => {
+                                          setShowInsert(false)
+                                          setExpandedType(null)
+                                          insertTypeCShared(k.type, set.id)
+                                        }}
+                                      >
+                                        <span
+                                          className="insert-menu-share-thumb"
+                                          aria-hidden
+                                        >
+                                          {thumb ? (
+                                            <img
+                                              src={thumb}
+                                              alt=""
+                                              style={{
+                                                imageRendering: 'pixelated',
+                                              }}
+                                            />
+                                          ) : (
+                                            <span className="asset-empty">
+                                              ∅
+                                            </span>
+                                          )}
+                                        </span>
+                                        <span className="insert-menu-share-text">
+                                          ↳ Use existing:{' '}
+                                          <strong>{set.name}</strong>
+                                        </span>
+                                      </button>
+                                    )
+                                  })}
+                                </>
+                              )}
+                            </div>
+                          )
+                        }),
+                      ]
+                    })
+                  })()}
                   <p className="insert-menu-hint">
-                    Click a type to choose how to populate it. Multi-blob layers
-                    can reuse an existing asset library — fill empty libraries
-                    later via <strong>Generate from font</strong> in the
-                    layer's properties.
+                    Click a type to choose how to populate it. Use the{' '}
+                    <Info size={11} aria-hidden /> button on any row for a
+                    description and stats. Multi-blob layers can reuse an
+                    existing asset library — fill empty libraries later via{' '}
+                    <strong>Generate from font</strong>.
                   </p>
                 </>
               )}
@@ -301,8 +427,8 @@ function LayerList() {
                 </>
               )}
             </div>
-          )}
-        </div>
+          </Popover>
+        )}
       </div>
 
       <div className="editor-pane-scroll">
