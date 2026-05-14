@@ -1950,12 +1950,51 @@ export const compatibleSetsForType = (
  *  expected to either rebind a layer to the new set or insert a layer
  *  pointing at it. Used by the AssetLibrary "+ New" flow so users can build
  *  a reusable asset before placing it on the canvas. */
+/** Change an asset set's per-slot dimensions. Pixel art doesn't scale
+ *  cleanly, so every slot's `rgba` is cleared in the process — only the
+ *  `compression` hint is preserved (the firmware-correctness contract on
+ *  round-trip). Throws when the set isn't found or the requested
+ *  dimensions are non-positive. */
+export const resizeAssetSet = (
+  project: TypeCProject,
+  setId: string,
+  width: number,
+  height: number,
+): TypeCProject => {
+  if (!Number.isFinite(width) || width < 1) {
+    throw new Error(`Width must be a positive integer, got ${width}.`)
+  }
+  if (!Number.isFinite(height) || height < 1) {
+    throw new Error(`Height must be a positive integer, got ${height}.`)
+  }
+  const set = project.assetSets.find((s) => s.id === setId)
+  if (!set) throw new Error(`Asset set ${setId} not found.`)
+  if (set.width === width && set.height === height) return project
+  const nextSets = project.assetSets.map((s) =>
+    s.id === setId
+      ? {
+          ...s,
+          width,
+          height,
+          slots: s.slots.map((slot) => ({ ...slot, rgba: null })),
+        }
+      : s,
+  )
+  return { ...project, assetSets: nextSets }
+}
+
 export const createTypeCAssetSet = (
   project: TypeCProject,
   type: number,
-  options: { bitmaps?: DecodedBitmap[]; name?: string } = {},
+  options: {
+    bitmaps?: DecodedBitmap[]
+    name?: string
+    /** Override the per-type default cell size. When bitmaps are also
+     *  supplied this is ignored — the bitmap dimensions win. */
+    size?: { w: number; h: number }
+  } = {},
 ): { project: TypeCProject; setId: string } => {
-  let newSet = createAssetSetForType(type)
+  let newSet = createAssetSetForType(type, options.size)
   if (options.name) newSet = { ...newSet, name: options.name }
   if (options.bitmaps && options.bitmaps.length > 0) {
     const expected = blobCountForType(type, project.animationFrames)

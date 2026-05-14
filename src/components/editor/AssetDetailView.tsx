@@ -185,6 +185,7 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
   const project = useEditor((s) => s.project)
   const renameAssetSetAction = useEditor((s) => s.renameAssetSetAction)
   const deleteAssetSetAction = useEditor((s) => s.deleteAssetSetAction)
+  const resizeAssetSetAction = useEditor((s) => s.resizeAssetSetAction)
 
   const set: AssetSet | undefined =
     project?.format === 'typeC'
@@ -198,6 +199,8 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
   // setId is the parent's render key, so a fresh AssetDetailView is mounted
   // per set — initial draftName seeded from props is safe.
   const [draftName, setDraftName] = useState(() => set?.name ?? '')
+  const [draftW, setDraftW] = useState(() => String(set?.width ?? 0))
+  const [draftH, setDraftH] = useState(() => String(set?.height ?? 0))
   const [fontTarget, setFontTarget] = useState<FontTarget | null>(null)
 
   if (!set || !project || project.format !== 'typeC') return null
@@ -210,6 +213,48 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
       renameAssetSetAction(set.id, trimmed)
     } else {
       setDraftName(set.name)
+    }
+  }
+
+  const widthDraftChanged = parseInt(draftW, 10) !== set.width
+  const heightDraftChanged = parseInt(draftH, 10) !== set.height
+  const sizeDraftChanged = widthDraftChanged || heightDraftChanged
+
+  const commitResize = () => {
+    const w = parseInt(draftW, 10)
+    const h = parseInt(draftH, 10)
+    if (!Number.isFinite(w) || w < 1 || !Number.isFinite(h) || h < 1) {
+      setLocalError('Width and height must be positive integers.')
+      return
+    }
+    if (w === set.width && h === set.height) return
+    // Pixel art can't scale cleanly — warn the user if slots actually have
+    // bitmaps to lose. Empty sets resize silently.
+    const hasBitmaps = set.slots.some((s) => s.rgba !== null)
+    if (
+      hasBitmaps &&
+      !window.confirm(
+        `Resize "${set.name}" to ${w}×${h}?\n\n` +
+          `All ${set.count} slot${set.count === 1 ? '' : 's'} will be cleared — pixel art doesn't scale cleanly. ` +
+          `You can undo with Cmd/Ctrl+Z.`,
+      )
+    ) {
+      // Revert the draft to current size so the inputs stay in sync.
+      setDraftW(String(set.width))
+      setDraftH(String(set.height))
+      return
+    }
+    const err = resizeAssetSetAction(set.id, w, h)
+    if (err) setLocalError(err)
+  }
+
+  const onSizeKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      commitResize()
+    } else if (e.key === 'Escape') {
+      setDraftW(String(set.width))
+      setDraftH(String(set.height))
     }
   }
 
@@ -305,8 +350,37 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
         <dt>slots</dt>
         <dd>{set.count}</dd>
         <dt>size</dt>
-        <dd>
-          {set.width}×{set.height}
+        <dd className="asset-detail-size">
+          <input
+            type="number"
+            min={1}
+            value={draftW}
+            onChange={(e) => setDraftW(e.target.value)}
+            onKeyDown={onSizeKey}
+            aria-label="Width"
+          />
+          <span className="asset-detail-size-x" aria-hidden>
+            ×
+          </span>
+          <input
+            type="number"
+            min={1}
+            value={draftH}
+            onChange={(e) => setDraftH(e.target.value)}
+            onKeyDown={onSizeKey}
+            aria-label="Height"
+          />
+          {sizeDraftChanged && (
+            <Tooltip content="Apply new size (clears all slot bitmaps)">
+              <button
+                type="button"
+                className="counter ghost asset-detail-resize"
+                onClick={commitResize}
+              >
+                Resize
+              </button>
+            </Tooltip>
+          )}
         </dd>
         <dt>consumers</dt>
         <dd>

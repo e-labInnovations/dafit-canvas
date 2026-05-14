@@ -24,6 +24,7 @@ import {
   renameAssetSet,
   replaceAsset,
   reorderLayer,
+  resizeAssetSet,
   setAllGuidesVisible,
   setGuideVisible,
   setLayerXY,
@@ -185,12 +186,26 @@ type EditorState = {
   // Type C AssetSet operations
   /** Add a standalone asset set to the library (no layer references it).
    *  The caller can later bind a layer via the rebind picker. */
-  createAssetSetAction: (type: number, bitmaps?: DecodedBitmap[]) => void
+  createAssetSetAction: (
+    type: number,
+    bitmaps?: DecodedBitmap[],
+    options?: { size?: { w: number; h: number } },
+  ) => void
   /** Append asset sets imported from another watch face's project (Type C
    *  only). Each set gets a fresh id so the library stays unambiguous.
    *  No layers are created — the user binds via the rebind picker. */
   importAssetSetsAction: (sets: AssetSet[]) => void
   renameAssetSetAction: (setId: string, name: string) => void
+  /** Change an asset set's dimensions. Clears every slot's `rgba` since
+   *  pixel art doesn't scale cleanly — the `compression` hint per slot
+   *  is preserved so re-export keeps the firmware-correct encoding.
+   *  Returns the error message on failure (e.g. zero / invalid w/h) so
+   *  the caller can surface it inline. */
+  resizeAssetSetAction: (
+    setId: string,
+    width: number,
+    height: number,
+  ) => string | null
   deleteAssetSetAction: (setId: string) => void
   rebindLayerAction: (layerIdx: number, newSetId: string) => void
   detachLayerAction: (layerIdx: number) => void
@@ -655,12 +670,13 @@ export const useEditor = create<EditorState>((set, get) => {
       }
     }),
 
-  createAssetSetAction: (type, bitmaps) =>
+  createAssetSetAction: (type, bitmaps, options) =>
     mutate((state) => {
       if (!state.project || state.project.format !== 'typeC') return state
       try {
         const { project: next } = createTypeCAssetSet(state.project, type, {
           bitmaps,
+          size: options?.size,
         })
         return { project: next, error: null }
       } catch (err) {
@@ -688,6 +704,21 @@ export const useEditor = create<EditorState>((set, get) => {
       },
       `rename:${setId}`,
     ),
+
+  resizeAssetSetAction: (setId, width, height) => {
+    const state = get()
+    if (!state.project || state.project.format !== 'typeC') {
+      return 'No Type C project loaded.'
+    }
+    try {
+      const next = resizeAssetSet(state.project, setId, width, height)
+      // One undo step per resize (no coalescing key — distinct intent).
+      mutate(() => ({ project: next }))
+      return null
+    } catch (err) {
+      return errMsg(err)
+    }
+  },
 
   deleteAssetSetAction: (setId) =>
     mutate((state) => {

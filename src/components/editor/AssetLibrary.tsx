@@ -1,7 +1,13 @@
 import { useRef, useState } from 'react'
-import { FileInput, Plus } from 'lucide-react'
+import { FileInput, Plus, Square, Type } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
-import { TYPEC_FONT_INSERTABLE, consumersOf } from '../../lib/projectIO'
+import {
+  INSERTABLE_CATEGORIES,
+  TYPEC_INSERTABLE_TYPES,
+  consumersOf,
+  insertableMeta,
+  type InsertableCategory,
+} from '../../lib/projectIO'
 import { assetSetThumbDataUrl } from '../../lib/assetThumb'
 import FontGenerator, { type FontTarget } from './FontGenerator'
 import ImportAssetsDialog from './ImportAssetsDialog'
@@ -19,13 +25,39 @@ function AssetLibrary() {
   const [fontTarget, setFontTarget] = useState<FontTarget | null>(null)
   const [showNewMenu, setShowNewMenu] = useState(false)
   const [showImport, setShowImport] = useState(false)
+  const [newFilter, setNewFilter] = useState('')
+  // Type whose Empty form is currently open. Single-target so the popover
+  // never shows two expanded rows at once.
+  const [emptyExpandedType, setEmptyExpandedType] = useState<number | null>(
+    null,
+  )
+  const [draftW, setDraftW] = useState('')
+  const [draftH, setDraftH] = useState('')
   const newBtnRef = useRef<HTMLButtonElement>(null)
 
   if (project?.format !== 'typeC') return null
 
+  const onToggleEmpty = (type: number, defaultW: number, defaultH: number) => {
+    if (emptyExpandedType === type) {
+      setEmptyExpandedType(null)
+      return
+    }
+    // Pre-fill with the corpus-derived defaults for this type — most users
+    // accept them as-is; the form is here for the cases that need a custom
+    // size (e.g. a smaller BACKGROUND, custom icon sets).
+    setEmptyExpandedType(type)
+    setDraftW(String(defaultW))
+    setDraftH(String(defaultH))
+  }
+
   const onCreateEmpty = (type: number) => {
+    const w = parseInt(draftW, 10)
+    const h = parseInt(draftH, 10)
+    if (!Number.isFinite(w) || w < 1) return
+    if (!Number.isFinite(h) || h < 1) return
     setShowNewMenu(false)
-    createAssetSetAction(type)
+    setEmptyExpandedType(null)
+    createAssetSetAction(type, undefined, { size: { w, h } })
   }
 
   const onCreateFromFont = (
@@ -84,30 +116,134 @@ function AssetLibrary() {
             className="insert-menu"
           >
             <div className="editor-new-menu insert-menu" role="presentation">
-              <div className="insert-menu-section">Empty set</div>
-              {TYPEC_FONT_INSERTABLE.map((k) => (
-                <button
-                  key={`empty-${k.type}`}
-                  type="button"
-                  onClick={() => onCreateEmpty(k.type)}
-                >
-                  {k.name}
-                  <span className="insert-menu-tag">{k.count}</span>
-                </button>
-              ))}
-              <div className="insert-menu-section">From font</div>
-              {TYPEC_FONT_INSERTABLE.map((k) => (
-                <button
-                  key={`font-${k.type}`}
-                  type="button"
-                  onClick={() =>
-                    onCreateFromFont(k.type, k.name, k.glyphs)
-                  }
-                >
-                  {k.name}
-                  <span className="insert-menu-tag">{k.count}</span>
-                </button>
-              ))}
+              <input
+                type="text"
+                className="insert-menu-filter"
+                placeholder="Filter types…"
+                value={newFilter}
+                onChange={(e) => setNewFilter(e.target.value)}
+                autoFocus
+              />
+              {(() => {
+                // Walk the full insertable list (not just the font-able
+                // subset) so single-image kinds like BACKGROUND, SEPERATOR
+                // and the analog hands are reachable from this popover too.
+                // The Font button is hidden on rows without glyphs — the
+                // Empty button works for every type.
+                const filtered = TYPEC_INSERTABLE_TYPES.filter((k) => {
+                  if (!newFilter) return true
+                  const q = newFilter.toLowerCase()
+                  return (
+                    k.name.toLowerCase().includes(q) ||
+                    `0x${k.type.toString(16).padStart(2, '0')}`.includes(q)
+                  )
+                })
+                const byCat = new Map<InsertableCategory, typeof filtered>()
+                for (const k of filtered) {
+                  const cat = insertableMeta(k.type).category
+                  const list = byCat.get(cat)
+                  if (list) list.push(k)
+                  else byCat.set(cat, [k])
+                }
+                return INSERTABLE_CATEGORIES.flatMap((cat) => {
+                  const items = byCat.get(cat.id)
+                  if (!items || items.length === 0) return []
+                  return [
+                    <div
+                      key={`cat-${cat.id}`}
+                      className="insert-menu-section"
+                    >
+                      {cat.label}
+                    </div>,
+                    ...items.flatMap((k) => {
+                      const isExpanded = emptyExpandedType === k.type
+                      return [
+                        <div
+                          key={`row-${k.type}`}
+                          className="insert-menu-asset-row"
+                        >
+                          <span className="insert-menu-asset-name">
+                            {k.name}
+                            <span className="insert-menu-tag">{k.count}</span>
+                          </span>
+                          <Tooltip
+                            content={
+                              isExpanded
+                                ? 'Close size form'
+                                : 'Create an empty set (fill slots later)'
+                            }
+                          >
+                            <button
+                              type="button"
+                              className={
+                                `insert-menu-asset-action` +
+                                (isExpanded ? ' active' : '')
+                              }
+                              onClick={() =>
+                                onToggleEmpty(k.type, k.dim.w, k.dim.h)
+                              }
+                              aria-label={`Create empty ${k.name} set`}
+                              aria-expanded={isExpanded}
+                            >
+                              <Square size={12} aria-hidden />
+                              Empty
+                            </button>
+                          </Tooltip>
+                          {k.glyphs && (
+                            <Tooltip content="Generate slots from a font">
+                              <button
+                                type="button"
+                                className="insert-menu-asset-action"
+                                onClick={() =>
+                                  onCreateFromFont(k.type, k.name, k.glyphs!)
+                                }
+                                aria-label={`Create ${k.name} set from a font`}
+                              >
+                                <Type size={12} aria-hidden />
+                                Font
+                              </button>
+                            </Tooltip>
+                          )}
+                        </div>,
+                        isExpanded && (
+                          <div
+                            key={`size-${k.type}`}
+                            className="insert-menu-asset-size"
+                          >
+                            <label>
+                              <span>W</span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={draftW}
+                                onChange={(e) => setDraftW(e.target.value)}
+                                autoFocus
+                              />
+                            </label>
+                            <span className="insert-menu-asset-size-x">×</span>
+                            <label>
+                              <span>H</span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={draftH}
+                                onChange={(e) => setDraftH(e.target.value)}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              className="insert-menu-asset-action primary"
+                              onClick={() => onCreateEmpty(k.type)}
+                            >
+                              Create
+                            </button>
+                          </div>
+                        ),
+                      ]
+                    }),
+                  ]
+                })
+              })()}
             </div>
           </Popover>
         )}

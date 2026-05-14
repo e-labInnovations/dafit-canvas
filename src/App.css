@@ -2073,6 +2073,100 @@
   align-items: stretch;
 }
 
+/* Asset-library variant of the row: name on the left, two inline action
+ * buttons (Empty / Font) on the right. Used by the AssetLibrary "New" menu
+ * to match the Layer-Insert popover's category grouping while keeping
+ * both create paths reachable in one click. */
+.insert-menu-asset-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+}
+
+.insert-menu .insert-menu-asset-name {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-h);
+  font-size: 12.5px;
+  min-width: 0;
+}
+
+.insert-menu .insert-menu-asset-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--accent-border);
+    color: var(--text-h);
+    background: var(--social-bg);
+  }
+
+  &.active {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    color: var(--text-h);
+  }
+
+  &.primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--bg);
+
+    &:hover {
+      background: var(--accent-border);
+      color: var(--bg);
+    }
+  }
+}
+
+/* Size form revealed when the user clicks Empty on a row. Sits directly
+ * below its trigger row and is dismissed by either clicking Empty again
+ * or hitting Create. */
+.insert-menu-asset-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 8px;
+
+  label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  input {
+    width: 56px;
+    padding: 3px 6px;
+    font-size: 12px;
+    font-family: var(--mono);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text-h);
+  }
+}
+
+.insert-menu-asset-size-x {
+  color: var(--text);
+  font-family: var(--mono);
+}
+
 .insert-menu .insert-menu-row .insert-menu-name {
   flex: 1 1 auto;
   text-align: left;
@@ -2664,6 +2758,36 @@
     margin: 0;
     color: var(--text-h);
   }
+}
+
+/* Inline size editor inside the stats row — two number inputs separated
+ * by an `×`, with a Resize button that only appears when the draft
+ * differs from the current value. */
+.asset-detail-size {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+
+  input {
+    width: 56px;
+    padding: 2px 6px;
+    font-size: 12px;
+    font-family: var(--mono);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text-h);
+  }
+}
+.asset-detail-size-x {
+  font-family: var(--mono);
+  color: var(--text);
+}
+.asset-detail-resize {
+  margin-left: 4px;
+  padding: 2px 8px !important;
+  font-size: 11px !important;
 }
 
 .asset-detail-actions {
@@ -5215,4 +5339,202 @@
   .counter {
     margin-bottom: 0;
   }
+}
+
+/* Watch console — BLE playground page. Reuses .faces-header / .banner /
+ * .device-card from the Upload page so the device card matches. The
+ * console-specific bits are the action grid (cards) and the event log. */
+.watch-console {
+  padding: 24px 32px 64px;
+  text-align: left;
+  max-width: 960px;
+  margin: 0 auto;
+
+  @media (max-width: 1024px) {
+    padding: 20px 16px 48px;
+  }
+}
+
+.console-section {
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
+
+  &:first-of-type {
+    border-top: none;
+  }
+
+  h2 {
+    font-size: 16px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text);
+    margin: 0 0 12px;
+  }
+}
+
+.console-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.console-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    h3 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-h);
+    }
+  }
+
+  /* Cards have their own action button at the bottom — let the field /
+   * hint above flex-grow so buttons line up across the grid. */
+  .counter {
+    align-self: flex-start;
+    margin-top: auto;
+    margin-bottom: 0;
+  }
+
+  .hint {
+    margin: 0;
+  }
+}
+
+.console-card-danger {
+  border-color: rgba(220, 60, 60, 0.45);
+}
+
+.console-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text);
+
+  span {
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 13px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-h);
+    font-family: inherit;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  textarea {
+    resize: vertical;
+    min-height: 48px;
+  }
+}
+
+.console-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.console-result {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+
+  strong {
+    font-size: 28px;
+    font-weight: 600;
+  }
+}
+
+.console-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+
+  h2 {
+    margin: 0;
+  }
+}
+
+.console-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.console-log-row {
+  display: grid;
+  grid-template-columns: 64px 14px minmax(120px, 1fr) 2fr;
+  gap: 8px;
+  align-items: baseline;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+
+  &:last-child {
+    border-bottom: none;
+  }
+
+  /* Inbound packets from the watch — slight cyan tint to match the
+   * smart-guide / guide-axis accent palette. */
+  &.dir-in {
+    background: rgba(0, 188, 212, 0.04);
+  }
+
+  &.dir-out {
+    background: rgba(120, 170, 255, 0.04);
+  }
+}
+
+.console-log-time {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.console-log-dir {
+  text-align: center;
+  color: var(--text);
+}
+
+.console-log-label {
+  color: var(--text-h);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.console-log-detail {
+  color: var(--text);
+  word-break: break-all;
 }
