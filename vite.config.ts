@@ -4,6 +4,9 @@ import react from '@vitejs/plugin-react'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
+  preview: {
+    allowedHosts: ['dafit-canvas.elabins.com'],
+  },
   server: {
     proxy: {
       // Order matters: longer prefix first so /api/moyoung-cdn doesn't get
