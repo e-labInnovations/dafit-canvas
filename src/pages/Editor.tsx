@@ -15,6 +15,7 @@ import EditorCanvas from "../components/editor/EditorCanvas";
 import LayerList from "../components/editor/LayerList";
 import Popover from "../components/Popover";
 import PropertyPanel from "../components/editor/PropertyPanel";
+import Tooltip from "../components/Tooltip";
 import UploadDialog from "../components/editor/UploadDialog";
 import { useEditor } from "../store/editorStore";
 import {
@@ -179,12 +180,13 @@ function Editor() {
                 {project.format === "typeC" ? "Type C" : "FaceN"}
               </span>
               {projectedSize !== null && (
-                <span
-                  className={`face-size-chip face-size-${classifyFaceSize(projectedSize)}`}
-                  title={faceSizeHint(projectedSize)}
-                >
-                  {formatFaceSize(projectedSize)}
-                </span>
+                <Tooltip content={faceSizeHint(projectedSize)}>
+                  <span
+                    className={`face-size-chip face-size-${classifyFaceSize(projectedSize)}`}
+                  >
+                    {formatFaceSize(projectedSize)}
+                  </span>
+                </Tooltip>
               )}
               {project.fileName ? ` · ${project.fileName}` : " · untitled"}
             </span>
@@ -196,26 +198,28 @@ function Editor() {
             role="group"
             aria-label="Undo / redo"
           >
-            <button
-              type="button"
-              className="counter ghost"
-              onClick={undo}
-              disabled={!canUndo}
-              title="Undo (Cmd/Ctrl+Z)"
-              aria-label="Undo"
-            >
-              <Undo2 size={14} aria-hidden />
-            </button>
-            <button
-              type="button"
-              className="counter ghost"
-              onClick={redo}
-              disabled={!canRedo}
-              title="Redo (Cmd/Ctrl+Shift+Z)"
-              aria-label="Redo"
-            >
-              <Redo2 size={14} aria-hidden />
-            </button>
+            <Tooltip content={"Undo\nCmd/Ctrl+Z"}>
+              <button
+                type="button"
+                className="counter ghost"
+                onClick={undo}
+                disabled={!canUndo}
+                aria-label="Undo"
+              >
+                <Undo2 size={14} aria-hidden />
+              </button>
+            </Tooltip>
+            <Tooltip content={"Redo\nCmd/Ctrl+Shift+Z"}>
+              <button
+                type="button"
+                className="counter ghost"
+                onClick={redo}
+                disabled={!canRedo}
+                aria-label="Redo"
+              >
+                <Redo2 size={14} aria-hidden />
+              </button>
+            </Tooltip>
           </div>
           <button
             ref={newBtnRef}
@@ -273,16 +277,17 @@ function Editor() {
             <Download size={14} aria-hidden />
             Export BIN
           </button>
-          <button
-            type="button"
-            className="counter"
-            onClick={onSendToWatch}
-            disabled={!project}
-            title="Pair watch over Bluetooth and flash this face directly"
-          >
-            <Bluetooth size={14} aria-hidden />
-            Send to watch
-          </button>
+          <Tooltip content="Pair watch over Bluetooth and flash this face directly">
+            <button
+              type="button"
+              className="counter"
+              onClick={onSendToWatch}
+              disabled={!project}
+            >
+              <Bluetooth size={14} aria-hidden />
+              Send to watch
+            </button>
+          </Tooltip>
           <input
             ref={fileInputRef}
             type="file"
@@ -299,15 +304,16 @@ function Editor() {
           <div>
             <strong>Editor:</strong> {error}
           </div>
-          <button
-            type="button"
-            className="banner-dismiss"
-            onClick={() => setError(null)}
-            aria-label="Dismiss error"
-            title="Dismiss"
-          >
-            <X size={16} aria-hidden />
-          </button>
+          <Tooltip content="Dismiss">
+            <button
+              type="button"
+              className="banner-dismiss"
+              onClick={() => setError(null)}
+              aria-label="Dismiss error"
+            >
+              <X size={16} aria-hidden />
+            </button>
+          </Tooltip>
         </div>
       )}
 

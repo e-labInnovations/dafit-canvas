@@ -14,6 +14,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from 'lucide-react'
+import Tooltip from '../Tooltip'
 
 type Tool = 'pencil' | 'eraser' | 'bucket' | 'eye'
 
@@ -432,7 +433,9 @@ function BmpPixelEditor({
   return createPortal(
     <div className="pixel-editor-wrap">
       <header className="pixel-editor-head">
-        <h2 title={name}>{name}</h2>
+        <Tooltip content={name} placement="bottom">
+          <h2>{name}</h2>
+        </Tooltip>
         <span className="pixel-editor-dims">
           {width}×{height}
         </span>
@@ -448,70 +451,77 @@ function BmpPixelEditor({
 
       <div className="pixel-editor-body">
         <aside className="pixel-editor-tools" aria-label="Tools">
-          <button
-            type="button"
-            className={`pixel-tool${tool === 'pencil' ? ' active' : ''}`}
-            title="Pencil (P)"
-            onClick={() => setTool('pencil')}
-          >
-            <Pencil size={16} aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={`pixel-tool${tool === 'eraser' ? ' active' : ''}`}
-            title="Eraser (E)"
-            onClick={() => setTool('eraser')}
-          >
-            <Eraser size={16} aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={`pixel-tool${tool === 'bucket' ? ' active' : ''}`}
-            title="Bucket fill (B)"
-            onClick={() => setTool('bucket')}
-          >
-            <PaintBucket size={16} aria-hidden />
-          </button>
-          <button
-            type="button"
-            className={`pixel-tool${tool === 'eye' ? ' active' : ''}`}
-            title="Eyedropper (I)"
-            onClick={() => setTool('eye')}
-          >
-            <Pipette size={16} aria-hidden />
-          </button>
+          <Tooltip content="Pencil (P)" placement="right">
+            <button
+              type="button"
+              className={`pixel-tool${tool === 'pencil' ? ' active' : ''}`}
+              onClick={() => setTool('pencil')}
+            >
+              <Pencil size={16} aria-hidden />
+            </button>
+          </Tooltip>
+          <Tooltip content="Eraser (E)" placement="right">
+            <button
+              type="button"
+              className={`pixel-tool${tool === 'eraser' ? ' active' : ''}`}
+              onClick={() => setTool('eraser')}
+            >
+              <Eraser size={16} aria-hidden />
+            </button>
+          </Tooltip>
+          <Tooltip content="Bucket fill (B)" placement="right">
+            <button
+              type="button"
+              className={`pixel-tool${tool === 'bucket' ? ' active' : ''}`}
+              onClick={() => setTool('bucket')}
+            >
+              <PaintBucket size={16} aria-hidden />
+            </button>
+          </Tooltip>
+          <Tooltip content="Eyedropper (I)" placement="right">
+            <button
+              type="button"
+              className={`pixel-tool${tool === 'eye' ? ' active' : ''}`}
+              onClick={() => setTool('eye')}
+            >
+              <Pipette size={16} aria-hidden />
+            </button>
+          </Tooltip>
 
           <span className="pixel-tool-sep" aria-hidden />
 
-          <button
-            type="button"
-            className="pixel-tool"
-            title="Undo (Cmd/Ctrl+Z)"
-            onClick={doUndo}
-            disabled={!canUndo}
-          >
-            <Undo2 size={16} aria-hidden />
-          </button>
-          <button
-            type="button"
-            className="pixel-tool"
-            title="Redo (Cmd/Ctrl+Shift+Z)"
-            onClick={doRedo}
-            disabled={!canRedo}
-          >
-            <Redo2 size={16} aria-hidden />
-          </button>
+          <Tooltip content={"Undo\nCmd/Ctrl+Z"} placement="right">
+            <button
+              type="button"
+              className="pixel-tool"
+              onClick={doUndo}
+              disabled={!canUndo}
+            >
+              <Undo2 size={16} aria-hidden />
+            </button>
+          </Tooltip>
+          <Tooltip content={"Redo\nCmd/Ctrl+Shift+Z"} placement="right">
+            <button
+              type="button"
+              className="pixel-tool"
+              onClick={doRedo}
+              disabled={!canRedo}
+            >
+              <Redo2 size={16} aria-hidden />
+            </button>
+          </Tooltip>
 
           <span className="pixel-tool-sep" aria-hidden />
 
-          <button
-            type="button"
-            className="pixel-tool"
-            title="Clear all"
-            onClick={clearAll}
-          >
-            <Trash2 size={16} aria-hidden />
-          </button>
+          <Tooltip content="Clear all" placement="right">
+            <button
+              type="button"
+              className="pixel-tool"
+              onClick={clearAll}
+            >
+              <Trash2 size={16} aria-hidden />
+            </button>
+          </Tooltip>
         </aside>
 
         <div className="pixel-editor-canvas">
@@ -544,34 +554,37 @@ function BmpPixelEditor({
 
           <div className="pixel-canvas-footer">
             <div className="pixel-zoom" role="group" aria-label="Zoom">
-              <button
-                type="button"
-                className="pixel-tool"
-                onClick={zoomOut}
-                title="Zoom out"
-                disabled={zoom <= MIN_ZOOM}
-              >
-                <ZoomOut size={14} aria-hidden />
-              </button>
+              <Tooltip content="Zoom out">
+                <button
+                  type="button"
+                  className="pixel-tool"
+                  onClick={zoomOut}
+                  disabled={zoom <= MIN_ZOOM}
+                >
+                  <ZoomOut size={14} aria-hidden />
+                </button>
+              </Tooltip>
               <span className="pixel-zoom-label">{zoom}×</span>
-              <button
-                type="button"
-                className="pixel-tool"
-                onClick={zoomIn}
-                title="Zoom in"
-                disabled={zoom >= MAX_ZOOM}
-              >
-                <ZoomIn size={14} aria-hidden />
-              </button>
-              <button
-                type="button"
-                className={`pixel-tool${showGrid ? ' active' : ''}`}
-                onClick={() => setShowGrid((v) => !v)}
-                title="Toggle grid"
-                disabled={zoom < 8}
-              >
-                <Grid3x3 size={14} aria-hidden />
-              </button>
+              <Tooltip content="Zoom in">
+                <button
+                  type="button"
+                  className="pixel-tool"
+                  onClick={zoomIn}
+                  disabled={zoom >= MAX_ZOOM}
+                >
+                  <ZoomIn size={14} aria-hidden />
+                </button>
+              </Tooltip>
+              <Tooltip content="Toggle grid">
+                <button
+                  type="button"
+                  className={`pixel-tool${showGrid ? ' active' : ''}`}
+                  onClick={() => setShowGrid((v) => !v)}
+                  disabled={zoom < 8}
+                >
+                  <Grid3x3 size={14} aria-hidden />
+                </button>
+              </Tooltip>
             </div>
           </div>
         </div>

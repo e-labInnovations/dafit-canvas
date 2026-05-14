@@ -4,6 +4,7 @@ import { useEditor } from '../../store/editorStore'
 import { compatibleSetsForType, consumersOf } from '../../lib/projectIO'
 import { assetSetThumbDataUrl } from '../../lib/assetThumb'
 import Popover from '../Popover'
+import Tooltip from '../Tooltip'
 import type { AssetSet, TypeCProject } from '../../types/face'
 
 /** Compatible-asset list rendered inside the rebind popover. Click-outside,
@@ -142,9 +143,9 @@ function AssetCard({
           )}
         </div>
         <div className="asset-card-meta">
-          <strong className="asset-card-name" title={set.name}>
-            {set.name}
-          </strong>
+          <Tooltip content={set.name} placement="top">
+            <strong className="asset-card-name">{set.name}</strong>
+          </Tooltip>
           <span className="asset-card-sub">
             {set.count} × {set.width}×{set.height}
           </span>
@@ -156,37 +157,40 @@ function AssetCard({
         </div>
       </div>
       <div className="asset-card-actions">
-        <button
-          ref={changeBtnRef}
-          type="button"
-          className="counter ghost"
-          onClick={() => setPickerOpen((v) => !v)}
-          aria-haspopup="dialog"
-          aria-expanded={pickerOpen}
-          title="Swap this layer to a different asset library"
-        >
-          <ChevronDown size={12} aria-hidden />
-          Change
-        </button>
-        <button
-          type="button"
-          className="counter ghost"
-          onClick={() => openAssetDetail(set.id)}
-          title="Open asset details (slots, rename, regenerate)"
-        >
-          <Settings2 size={12} aria-hidden />
-          Open
-        </button>
-        {shareCount > 0 && (
+        <Tooltip content="Swap this layer to a different asset library">
+          <button
+            ref={changeBtnRef}
+            type="button"
+            className="counter ghost"
+            onClick={() => setPickerOpen((v) => !v)}
+            aria-haspopup="dialog"
+            aria-expanded={pickerOpen}
+          >
+            <ChevronDown size={12} aria-hidden />
+            Change
+          </button>
+        </Tooltip>
+        <Tooltip content="Open asset details (slots, rename, regenerate)">
           <button
             type="button"
             className="counter ghost"
-            onClick={() => detachLayer(layerIdx)}
-            title="Clone the set so this layer has its own exclusive copy"
+            onClick={() => openAssetDetail(set.id)}
           >
-            <GitFork size={12} aria-hidden />
-            Detach
+            <Settings2 size={12} aria-hidden />
+            Open
           </button>
+        </Tooltip>
+        {shareCount > 0 && (
+          <Tooltip content="Clone the set so this layer has its own exclusive copy">
+            <button
+              type="button"
+              className="counter ghost"
+              onClick={() => detachLayer(layerIdx)}
+            >
+              <GitFork size={12} aria-hidden />
+              Detach
+            </button>
+          </Tooltip>
         )}
       </div>
       {pickerOpen && layer && (

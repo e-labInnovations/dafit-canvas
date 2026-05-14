@@ -13,6 +13,7 @@ import {
 import FacePreview from '../components/dump/FacePreview'
 import FacePreviewN from '../components/dump/FacePreviewN'
 import Loader from '../components/Loader'
+import Tooltip from '../components/Tooltip'
 import {
   MoyoungWatch,
   isWebBluetoothSupported,
@@ -247,12 +248,13 @@ function UploadWatchFace() {
             {file ? (
               <>
                 {file.name}{' '}
-                <span
-                  className={`face-size-chip face-size-${classifyFaceSize(file.size)}`}
-                  title={faceSizeHint(file.size)}
-                >
-                  {formatFaceSize(file.size)}
-                </span>
+                <Tooltip content={faceSizeHint(file.size)}>
+                  <span
+                    className={`face-size-chip face-size-${classifyFaceSize(file.size)}`}
+                  >
+                    {formatFaceSize(file.size)}
+                  </span>
+                </Tooltip>
               </>
             ) : (
               'No file selected'

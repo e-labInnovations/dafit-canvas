@@ -6,6 +6,7 @@ import { assetSetThumbDataUrl } from '../../lib/assetThumb'
 import FontGenerator, { type FontTarget } from './FontGenerator'
 import ImportAssetsDialog from './ImportAssetsDialog'
 import Popover from '../Popover'
+import Tooltip from '../Tooltip'
 
 function AssetLibrary() {
   const project = useEditor((s) => s.project)
@@ -54,15 +55,16 @@ function AssetLibrary() {
           Asset library{' '}
           <span className="asset-library-count">{project.assetSets.length}</span>
         </h4>
-        <button
-          type="button"
-          className="counter ghost icon-only"
-          onClick={() => setShowImport(true)}
-          title="Import asset sets from another watch face (.bin / .zip)"
-          aria-label="Import assets from another watch face"
-        >
-          <FileInput size={12} aria-hidden />
-        </button>
+        <Tooltip content="Import asset sets from another watch face (.bin / .zip)">
+          <button
+            type="button"
+            className="counter ghost icon-only"
+            onClick={() => setShowImport(true)}
+            aria-label="Import assets from another watch face"
+          >
+            <FileInput size={12} aria-hidden />
+          </button>
+        </Tooltip>
         <button
           ref={newBtnRef}
           type="button"
@@ -126,6 +128,7 @@ function AssetLibrary() {
           const isCurrent = set.id === assetDetailId
           return (
             <li key={set.id}>
+              <Tooltip content={`Open "${set.name}" details`} placement="left">
               <button
                 type="button"
                 className={
@@ -135,7 +138,6 @@ function AssetLibrary() {
                 }
                 onClick={() => openAssetDetail(set.id)}
                 aria-pressed={isCurrent}
-                title={`Open "${set.name}" details`}
               >
                 <span className="asset-library-thumb">
                   {url ? (
@@ -158,6 +160,7 @@ function AssetLibrary() {
                   </span>
                 </span>
               </button>
+              </Tooltip>
             </li>
           )
         })}

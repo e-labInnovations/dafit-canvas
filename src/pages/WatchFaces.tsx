@@ -14,6 +14,7 @@ import {
 import axios from 'axios'
 import FacePreviewModal from '../components/FacePreviewModal'
 import Loader from '../components/Loader'
+import Tooltip from '../components/Tooltip'
 import {
   errorMessage,
   fetchLegacyFaces,
@@ -337,21 +338,27 @@ function WatchFaces() {
                   </span>
                 </button>
                 <div className="face-meta">
-                  <span className="face-id" title={`id ${face.id}`}>
-                    {face.name ?? `#${face.id}`}
-                  </span>
+                  <Tooltip content={`id ${face.id}`}>
+                    <span className="face-id">
+                      {face.name ?? `#${face.id}`}
+                    </span>
+                  </Tooltip>
                   <div className="face-meta-row">
                     {face.uploader && (
-                      <span className="face-uploader" title={`Uploader: ${face.uploader}`}>
-                        <User size={12} aria-hidden />
-                        {face.uploader}
-                      </span>
+                      <Tooltip content={`Uploader: ${face.uploader}`}>
+                        <span className="face-uploader">
+                          <User size={12} aria-hidden />
+                          {face.uploader}
+                        </span>
+                      </Tooltip>
                     )}
                     {face.download !== null && (
-                      <span className="face-downloads" title={`${face.download} downloads`}>
-                        <Download size={12} aria-hidden />
-                        {formatCount(face.download)}
-                      </span>
+                      <Tooltip content={`${face.download} downloads`}>
+                        <span className="face-downloads">
+                          <Download size={12} aria-hidden />
+                          {formatCount(face.download)}
+                        </span>
+                      </Tooltip>
                     )}
                   </div>
                 </div>

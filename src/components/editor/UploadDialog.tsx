@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react'
 import Loader from '../Loader'
+import Tooltip from '../Tooltip'
 import {
   MoyoungWatch,
   isWebBluetoothSupported,
@@ -160,12 +161,13 @@ function UploadDialog({ onClose, bytes, filename }: Props) {
             <h2 id="upload-modal-title">Send to watch</h2>
             <p className="upload-modal-file">
               <code>{filename}</code>
-              <span
-                className={`face-size-chip face-size-${classifyFaceSize(size)}`}
-                title={faceSizeHint(size)}
-              >
-                {formatFaceSize(size)}
-              </span>
+              <Tooltip content={faceSizeHint(size)}>
+                <span
+                  className={`face-size-chip face-size-${classifyFaceSize(size)}`}
+                >
+                  {formatFaceSize(size)}
+                </span>
+              </Tooltip>
             </p>
           </header>
 

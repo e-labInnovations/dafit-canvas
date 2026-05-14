@@ -16,6 +16,7 @@ import {
   defaultGlyphTextForType,
 } from '../../lib/projectIO'
 import BmpPixelEditor from './BmpPixelEditor'
+import Tooltip from '../Tooltip'
 import FontGenerator, { type FontTarget } from './FontGenerator'
 import type { AssetSet, AssetSlot } from '../../types/face'
 
@@ -133,30 +134,34 @@ function SlotRow({
       </div>
       <code className="asset-detail-slot-label">{slotIdx}</code>
       <div className="asset-detail-slot-actions">
-        <button
-          type="button"
-          className="icon-btn"
-          title="Edit BMP (crop, draw, filters, resize)"
-          aria-label="Edit BMP"
-          onClick={onEdit}
-        >
-          <Pencil size={12} />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title={
+        <Tooltip content="Edit BMP (crop, draw, filters, resize)">
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Edit BMP"
+            onClick={onEdit}
+          >
+            <Pencil size={12} />
+          </button>
+        </Tooltip>
+        <Tooltip
+          content={
             isEmpty
               ? 'Set BMP from file'
               : setCount === 1
                 ? 'Replace from file (any size)'
                 : `Replace from file (${width}×${height}, or resize the whole set)`
           }
-          aria-label={isEmpty ? 'Set BMP from file' : 'Replace BMP from file'}
-          onClick={onPick}
         >
-          <Upload size={12} />
-        </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label={isEmpty ? 'Set BMP from file' : 'Replace BMP from file'}
+            onClick={onPick}
+          >
+            <Upload size={12} />
+          </button>
+        </Tooltip>
       </div>
 
       {editorOpen && (
@@ -281,15 +286,16 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
         <div className="banner banner-error asset-detail-error">
           <AlertTriangle size={16} aria-hidden />
           <div>{localError}</div>
-          <button
-            type="button"
-            className="banner-dismiss"
-            onClick={() => setLocalError(null)}
-            aria-label="Dismiss error"
-            title="Dismiss"
-          >
-            <X size={14} aria-hidden />
-          </button>
+          <Tooltip content="Dismiss">
+            <button
+              type="button"
+              className="banner-dismiss"
+              onClick={() => setLocalError(null)}
+              aria-label="Dismiss error"
+            >
+              <X size={14} aria-hidden />
+            </button>
+          </Tooltip>
         </div>
       )}
 
@@ -315,20 +321,23 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
           <Type size={14} aria-hidden />
           Regenerate from font
         </button>
-        <button
-          type="button"
-          className="counter ghost danger"
-          onClick={onDelete}
-          disabled={consumers.length > 0}
-          title={
+        <Tooltip
+          content={
             consumers.length > 0
               ? `Used by ${consumers.length} layer(s); rebind or delete them first`
               : 'Delete this asset set'
           }
         >
-          <Trash2 size={14} aria-hidden />
-          Delete
-        </button>
+          <button
+            type="button"
+            className="counter ghost danger"
+            onClick={onDelete}
+            disabled={consumers.length > 0}
+          >
+            <Trash2 size={14} aria-hidden />
+            Delete
+          </button>
+        </Tooltip>
       </div>
 
       <h3 className="asset-detail-section-title">Slots</h3>

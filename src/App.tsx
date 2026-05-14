@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { NavLink, Route, Routes } from 'react-router-dom'
 import { Info } from 'lucide-react'
+import Tooltip from './components/Tooltip'
 import Home from './pages/Home'
 import WatchFaces from './pages/WatchFaces'
 import UploadWatchFace from './pages/UploadWatchFace'
@@ -26,16 +27,17 @@ function App() {
         <NavLink to="/pack">Pack</NavLink>
         <NavLink to="/upload">Upload</NavLink>
         <NavLink to="/docs">Docs</NavLink>
-        <button
-          type="button"
-          className="top-nav-about"
-          onClick={() => setAboutOpen(true)}
-          aria-label="About DaFit Canvas"
-          title="About"
-        >
-          <Info size={16} aria-hidden />
-          <span>About</span>
-        </button>
+        <Tooltip content="About">
+          <button
+            type="button"
+            className="top-nav-about"
+            onClick={() => setAboutOpen(true)}
+            aria-label="About DaFit Canvas"
+          >
+            <Info size={16} aria-hidden />
+            <span>About</span>
+          </button>
+        </Tooltip>
       </nav>
 
       <Routes>

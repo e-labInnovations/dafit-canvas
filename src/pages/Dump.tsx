@@ -11,6 +11,7 @@ import {
 import FacePreview from '../components/dump/FacePreview'
 import FacePreviewN from '../components/dump/FacePreviewN'
 import DummyControls from '../components/dump/DummyControls'
+import Tooltip from '../components/Tooltip'
 import {
   buildWatchfaceTxt,
   decodeFile,
@@ -419,15 +420,26 @@ function Dump() {
                     ) : (
                       <span className="blob-noimg">raw</span>
                     )}
-                    <button
-                      type="button"
-                      className="blob-download"
-                      onClick={onDownload}
-                      title={canExportBmp ? 'Download as BMP' : 'Download raw bytes'}
-                      aria-label={canExportBmp ? 'Download as BMP' : 'Download raw bytes'}
+                    <Tooltip
+                      content={
+                        canExportBmp
+                          ? 'Download as BMP'
+                          : 'Download raw bytes'
+                      }
                     >
-                      <Download size={12} aria-hidden />
-                    </button>
+                      <button
+                        type="button"
+                        className="blob-download"
+                        onClick={onDownload}
+                        aria-label={
+                          canExportBmp
+                            ? 'Download as BMP'
+                            : 'Download raw bytes'
+                        }
+                      >
+                        <Download size={12} aria-hidden />
+                      </button>
+                    </Tooltip>
                   </div>
                   <div className="blob-meta">
                     <code className="blob-name">{padIdx(b.index)}.bmp</code>
@@ -552,15 +564,16 @@ function Dump() {
                           <span className="blob-noimg">raw</span>
                         )}
                         {canExportBmp && (
-                          <button
-                            type="button"
-                            className="blob-download"
-                            onClick={onDownload}
-                            title="Download as BMP"
-                            aria-label="Download as BMP"
-                          >
-                            <Download size={12} aria-hidden />
-                          </button>
+                          <Tooltip content="Download as BMP">
+                            <button
+                              type="button"
+                              className="blob-download"
+                              onClick={onDownload}
+                              aria-label="Download as BMP"
+                            >
+                              <Download size={12} aria-hidden />
+                            </button>
+                          </Tooltip>
                         )}
                       </div>
                       <div className="blob-meta">

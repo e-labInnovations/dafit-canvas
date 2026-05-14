@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Search } from 'lucide-react'
 import { COMMON_SYSTEM_FONTS, fontIsAvailable } from '../../lib/fontLoader'
 import Popover from '../Popover'
+import Tooltip from '../Tooltip'
 
 type Props = {
   value: string
@@ -116,19 +117,15 @@ function FontFamilyPicker({ value, onChange, previewWeight = 500 }: Props) {
                       {f}
                     </span>
                     {installed ? (
-                      <span
-                        className="font-picker-item-tag"
-                        title="Installed on this system"
-                      >
-                        ✓
-                      </span>
+                      <Tooltip content="Installed on this system">
+                        <span className="font-picker-item-tag">✓</span>
+                      </Tooltip>
                     ) : (
-                      <span
-                        className="font-picker-item-tag font-picker-item-fallback"
-                        title="Not detected — will fall back to default"
-                      >
-                        fallback
-                      </span>
+                      <Tooltip content="Not detected — will fall back to default">
+                        <span className="font-picker-item-tag font-picker-item-fallback">
+                          fallback
+                        </span>
+                      </Tooltip>
                     )}
                     {selected && <Check size={12} aria-hidden />}
                   </button>

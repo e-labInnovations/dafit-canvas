@@ -1460,6 +1460,97 @@
   color: var(--text);
 }
 
+/* ----- Shared Tooltip -----
+ *
+ * Portalled by `<Tooltip>` (src/components/Tooltip.tsx). Positioning is
+ * set inline; this rule supplies the visuals (surface, typography,
+ * arrow). Renders above popovers (z-index 240 > popover's 220) so a
+ * tooltip on a popover trigger stays readable while the popover is open. */
+.tooltip {
+  position: fixed;
+  z-index: 240;
+  pointer-events: none;
+  /* Inverted surface for clear contrast against page chrome. The
+   * project doesn't have a dedicated "inverted" token, so derive from
+   * the heading/text colours. */
+  background: var(--text-h);
+  color: var(--bg);
+  font-family: var(--sans);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 5px 9px;
+  border-radius: 5px;
+  max-width: 280px;
+  /* Preserve explicit `\n` in tooltip content for two-line hints like
+   * the alignment buttons' "Align right (x = 240 − width)" labels. */
+  white-space: pre-line;
+  box-shadow:
+    rgba(0, 0, 0, 0.15) 0 4px 12px,
+    rgba(0, 0, 0, 0.1) 0 2px 4px;
+  animation: tooltip-fade 0.12s ease-out;
+
+  code {
+    /* Inline code inside the tooltip — flip the contrast so it stays
+     * legible on the inverted surface. */
+    background: rgba(255, 255, 255, 0.15);
+    color: var(--bg);
+    font-size: 11px;
+    padding: 1px 4px;
+  }
+
+  kbd {
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.15);
+    color: var(--bg);
+  }
+}
+
+/* Tiny CSS-only arrow pointing back at the trigger. Implemented as a
+ * 6px square rotated 45° so it inherits the tooltip's background. */
+.tooltip::before {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: inherit;
+  transform: rotate(45deg);
+}
+
+.tooltip-top::before {
+  bottom: -4px;
+  left: 50%;
+  margin-left: -4px;
+}
+.tooltip-bottom::before {
+  top: -4px;
+  left: 50%;
+  margin-left: -4px;
+}
+.tooltip-left::before {
+  right: -4px;
+  top: 50%;
+  margin-top: -4px;
+}
+.tooltip-right::before {
+  left: -4px;
+  top: 50%;
+  margin-top: -4px;
+}
+
+@keyframes tooltip-fade {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* ----- Shared Popover shell -----
  *
  * The `<Popover>` component (src/components/Popover.tsx) renders into the

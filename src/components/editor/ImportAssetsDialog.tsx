@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
 import { importBin, importZip } from '../../lib/projectIO'
+import Tooltip from '../Tooltip'
 import type { AssetSet } from '../../types/face'
 
 type Props = {
@@ -253,9 +254,9 @@ function ImportAssetsDialog({ onClose }: Props) {
                             <span className="asset-empty">empty</span>
                           )}
                         </span>
-                        <span className="import-asset-name" title={s.name}>
-                          {s.name}
-                        </span>
+                        <Tooltip content={s.name}>
+                          <span className="import-asset-name">{s.name}</span>
+                        </Tooltip>
                         <span className="import-asset-meta">
                           {s.kind} · {s.width}×{s.height} · {s.count} slot
                           {s.count === 1 ? '' : 's'}

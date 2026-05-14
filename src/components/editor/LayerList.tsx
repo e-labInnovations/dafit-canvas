@@ -26,6 +26,7 @@ import AssetLibrary from './AssetLibrary'
 import FontGenerator, { type FontTarget } from './FontGenerator'
 import Popover from '../Popover'
 import { assetSetThumbDataUrl } from '../../lib/assetThumb'
+import Tooltip from '../Tooltip'
 
 const FACEN_DEPENDENT_KINDS: FaceNDigitDependentKind[] = [
   'TimeNum',
@@ -234,21 +235,22 @@ function LayerList() {
                                     {k.count}
                                   </span>
                                 </button>
-                                <button
-                                  type="button"
-                                  className={
-                                    `insert-menu-info` +
-                                    (isHelpOpen ? ' active' : '')
-                                  }
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setHelpType(isHelpOpen ? null : k.type)
-                                  }}
-                                  aria-label={`What is ${k.name}?`}
-                                  title={`What is ${k.name}?`}
-                                >
-                                  <Info size={12} aria-hidden />
-                                </button>
+                                <Tooltip content={`What is ${k.name}?`}>
+                                  <button
+                                    type="button"
+                                    className={
+                                      `insert-menu-info` +
+                                      (isHelpOpen ? ' active' : '')
+                                    }
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setHelpType(isHelpOpen ? null : k.type)
+                                    }}
+                                    aria-label={`What is ${k.name}?`}
+                                  >
+                                    <Info size={12} aria-hidden />
+                                  </button>
+                                </Tooltip>
                               </div>
                               {isHelpOpen && (
                                 <div className="insert-menu-help">
@@ -514,28 +516,28 @@ function LayerList() {
                     setDragOverIdx(null)
                   }}
                 >
-                  <span
-                    className="layer-drag-handle"
-                    aria-hidden
-                    title="Drag to reorder"
-                  >
-                    <GripVertical size={14} />
-                  </span>
+                  <Tooltip content="Drag to reorder">
+                    <span className="layer-drag-handle" aria-hidden>
+                      <GripVertical size={14} />
+                    </span>
+                  </Tooltip>
                   <Layers size={14} aria-hidden />
-                  <span className="layer-name" title={l.name}>
-                    {l.name}
-                  </span>
-                  <button
-                    type="button"
-                    className="icon-btn danger"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      remove(l.index)
-                    }}
-                    aria-label="Delete layer"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+                  <Tooltip content={l.name} placement="right">
+                    <span className="layer-name">{l.name}</span>
+                  </Tooltip>
+                  <Tooltip content="Delete layer">
+                    <button
+                      type="button"
+                      className="icon-btn danger"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        remove(l.index)
+                      }}
+                      aria-label="Delete layer"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </Tooltip>
                 </li>
               )
             })}
@@ -557,20 +559,21 @@ function LayerList() {
                     set {i} · {set.digits[0]?.width ?? 0}×
                     {set.digits[0]?.height ?? 0}
                   </span>
-                  <button
-                    type="button"
-                    className="icon-btn"
-                    aria-label={`Regenerate digit set ${i} from font`}
-                    title="Regenerate from font"
-                    onClick={() =>
-                      onOpenFontGen({
-                        mode: 'replace-faceN-digit-set',
-                        setIdx: i,
-                      })
-                    }
-                  >
-                    <RefreshCcw size={12} />
-                  </button>
+                  <Tooltip content="Regenerate from font">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label={`Regenerate digit set ${i} from font`}
+                      onClick={() =>
+                        onOpenFontGen({
+                          mode: 'replace-faceN-digit-set',
+                          setIdx: i,
+                        })
+                      }
+                    >
+                      <RefreshCcw size={12} />
+                    </button>
+                  </Tooltip>
                 </li>
               ))}
             </ul>

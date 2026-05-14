@@ -21,6 +21,7 @@ import {
 import { SCREEN_H, SCREEN_W } from "../../types/face";
 import AssetCard from "./AssetCard";
 import AssetDetailView from "./AssetDetailView";
+import Tooltip from "../Tooltip";
 import type { FaceN } from "../../lib/faceN";
 import type { EditorProject } from "../../types/face";
 import type { DummyStateN } from "../../lib/renderFaceN";
@@ -348,61 +349,67 @@ function AlignmentRow({ idx }: { idx: number }) {
 
   return (
     <div className="prop-alignment-row" role="group" aria-label="Align layer">
-      <button
-        type="button"
-        className="icon-btn"
-        title="Align left (x = 0)"
-        onClick={() => align("left")}
-        disabled={disabled}
-      >
-        <AlignStartVertical size={14} aria-hidden />
-      </button>
-      <button
-        type="button"
-        className="icon-btn"
-        title="Centre horizontally"
-        onClick={() => align("centerH")}
-        disabled={disabled}
-      >
-        <AlignCenterVertical size={14} aria-hidden />
-      </button>
-      <button
-        type="button"
-        className="icon-btn"
-        title={`Align right (x = ${SCREEN_W} − width)`}
-        onClick={() => align("right")}
-        disabled={disabled}
-      >
-        <AlignEndVertical size={14} aria-hidden />
-      </button>
+      <Tooltip content="Align left (x = 0)">
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={() => align("left")}
+          disabled={disabled}
+        >
+          <AlignStartVertical size={14} aria-hidden />
+        </button>
+      </Tooltip>
+      <Tooltip content="Centre horizontally">
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={() => align("centerH")}
+          disabled={disabled}
+        >
+          <AlignCenterVertical size={14} aria-hidden />
+        </button>
+      </Tooltip>
+      <Tooltip content={`Align right (x = ${SCREEN_W} − width)`}>
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={() => align("right")}
+          disabled={disabled}
+        >
+          <AlignEndVertical size={14} aria-hidden />
+        </button>
+      </Tooltip>
       <span className="prop-alignment-sep" aria-hidden />
-      <button
-        type="button"
-        className="icon-btn"
-        title="Align top (y = 0)"
-        onClick={() => align("top")}
-        disabled={disabled}
-      >
-        <AlignStartHorizontal size={14} aria-hidden />
-      </button>
-      <button
-        type="button"
-        className="icon-btn"
-        title="Centre vertically"
-        onClick={() => align("centerV")}
-        disabled={disabled}
-      >
-        <AlignCenterHorizontal size={14} aria-hidden />
-      </button>
-      <button
-        type="button"
-        className="icon-btn"
-        title={`Align bottom (y = ${SCREEN_H} − height)`}
-        onClick={() => align("bottom")}
-        disabled={disabled}
-      >
-        <AlignEndHorizontal size={14} aria-hidden />
-      </button>
+      <Tooltip content="Align top (y = 0)">
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={() => align("top")}
+          disabled={disabled}
+        >
+          <AlignStartHorizontal size={14} aria-hidden />
+        </button>
+      </Tooltip>
+      <Tooltip content="Centre vertically">
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={() => align("centerV")}
+          disabled={disabled}
+        >
+          <AlignCenterHorizontal size={14} aria-hidden />
+        </button>
+      </Tooltip>
+      <Tooltip content={`Align bottom (y = ${SCREEN_H} − height)`}>
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={() => align("bottom")}
+          disabled={disabled}
+        >
+          <AlignEndHorizontal size={14} aria-hidden />
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -629,120 +636,138 @@ function MultiArrangeRow({ idxs }: { idxs: number[] }) {
         role="group"
         aria-label="Align selection"
       >
-        <button
-          type="button"
-          className="icon-btn"
-          title="Align left edges"
-          onClick={alignL}
-          disabled={disabled}
-        >
-          <AlignStartVertical size={14} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title="Align horizontal centres"
-          onClick={alignCH}
-          disabled={disabled}
-        >
-          <AlignCenterVertical size={14} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title="Align right edges"
-          onClick={alignR}
-          disabled={disabled}
-        >
-          <AlignEndVertical size={14} aria-hidden />
-        </button>
+        <Tooltip content="Align left edges">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={alignL}
+            disabled={disabled}
+          >
+            <AlignStartVertical size={14} aria-hidden />
+          </button>
+        </Tooltip>
+        <Tooltip content="Align horizontal centres">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={alignCH}
+            disabled={disabled}
+          >
+            <AlignCenterVertical size={14} aria-hidden />
+          </button>
+        </Tooltip>
+        <Tooltip content="Align right edges">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={alignR}
+            disabled={disabled}
+          >
+            <AlignEndVertical size={14} aria-hidden />
+          </button>
+        </Tooltip>
         <span className="prop-alignment-sep" aria-hidden />
-        <button
-          type="button"
-          className="icon-btn"
-          title="Align top edges"
-          onClick={alignT}
-          disabled={disabled}
-        >
-          <AlignStartHorizontal size={14} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title="Align vertical centres"
-          onClick={alignCV}
-          disabled={disabled}
-        >
-          <AlignCenterHorizontal size={14} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title="Align bottom edges"
-          onClick={alignB}
-          disabled={disabled}
-        >
-          <AlignEndHorizontal size={14} aria-hidden />
-        </button>
+        <Tooltip content="Align top edges">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={alignT}
+            disabled={disabled}
+          >
+            <AlignStartHorizontal size={14} aria-hidden />
+          </button>
+        </Tooltip>
+        <Tooltip content="Align vertical centres">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={alignCV}
+            disabled={disabled}
+          >
+            <AlignCenterHorizontal size={14} aria-hidden />
+          </button>
+        </Tooltip>
+        <Tooltip content="Align bottom edges">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={alignB}
+            disabled={disabled}
+          >
+            <AlignEndHorizontal size={14} aria-hidden />
+          </button>
+        </Tooltip>
       </div>
       <div
         className="prop-alignment-row"
         role="group"
         aria-label="Distribute selection"
       >
-        <button
-          type="button"
-          className="icon-btn"
-          title={
+        <Tooltip
+          content={
             distDisabled
               ? "Equal horizontal gaps (needs 3+ layers)"
               : "Equal horizontal gaps"
           }
-          onClick={distGapsH}
-          disabled={distDisabled}
         >
-          <AlignHorizontalSpaceBetween size={14} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title={
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={distGapsH}
+            disabled={distDisabled}
+          >
+            <AlignHorizontalSpaceBetween size={14} aria-hidden />
+          </button>
+        </Tooltip>
+        <Tooltip
+          content={
             distDisabled
               ? "Distribute horizontal centres (needs 3+ layers)"
               : "Distribute horizontal centres"
           }
-          onClick={distCentersH}
-          disabled={distDisabled}
         >
-          <AlignHorizontalDistributeCenter size={14} aria-hidden />
-        </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={distCentersH}
+            disabled={distDisabled}
+          >
+            <AlignHorizontalDistributeCenter size={14} aria-hidden />
+          </button>
+        </Tooltip>
         <span className="prop-alignment-sep" aria-hidden />
-        <button
-          type="button"
-          className="icon-btn"
-          title={
+        <Tooltip
+          content={
             distDisabled
               ? "Equal vertical gaps (needs 3+ layers)"
               : "Equal vertical gaps"
           }
-          onClick={distGapsV}
-          disabled={distDisabled}
         >
-          <AlignVerticalSpaceBetween size={14} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="icon-btn"
-          title={
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={distGapsV}
+            disabled={distDisabled}
+          >
+            <AlignVerticalSpaceBetween size={14} aria-hidden />
+          </button>
+        </Tooltip>
+        <Tooltip
+          content={
             distDisabled
               ? "Distribute vertical centres (needs 3+ layers)"
               : "Distribute vertical centres"
           }
-          onClick={distCentersV}
-          disabled={distDisabled}
         >
-          <AlignVerticalDistributeCenter size={14} aria-hidden />
-        </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={distCentersV}
+            disabled={distDisabled}
+          >
+            <AlignVerticalDistributeCenter size={14} aria-hidden />
+          </button>
+        </Tooltip>
       </div>
     </>
   );
@@ -853,9 +878,9 @@ function PropertyPanel() {
         {layer && project && (
           <>
             <h3>Layer</h3>
-            <p className="prop-meta" title={layer.name}>
-              {layer.name}
-            </p>
+            <Tooltip content={layer.name}>
+              <p className="prop-meta">{layer.name}</p>
+            </Tooltip>
             {project.format === "typeC" ? (
               <TypeCFields idx={layer.index} />
             ) : (
