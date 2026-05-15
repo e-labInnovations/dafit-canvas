@@ -77,7 +77,13 @@ function Popover({
       if (!a) return
       const r = a.getBoundingClientRect()
       const pRect = p?.getBoundingClientRect()
-      const popH = pRect?.height ?? 0
+      // Use `scrollHeight` for the flip decision — that's the popover's
+      // *intrinsic* content height, ignoring any `max-height` clamp we
+      // may have already applied on a previous tick. Going off the
+      // clamped `getBoundingClientRect().height` makes the placement
+      // bistable: once we flip and clamp, the other side now "fits", so
+      // the next update flips back, ad infinitum.
+      const popH = p?.scrollHeight ?? pRect?.height ?? 0
       const popW = pRect?.width ?? 0
 
       // Vertical placement — flip below↔above when the requested side
@@ -97,17 +103,41 @@ function Popover({
         position: 'fixed',
         zIndex: 220,
       }
+      // Viewport gutter — leaves room for the page chrome (nav) and a small
+      // breathing margin so the popover never butts against an edge.
+      const GUTTER = 8
       if (vertical === 'bottom') {
         next.top = r.bottom + offset
+        // Cap height to whatever's left below the anchor. Combined with
+        // the popover root's `overflow-y: auto` (set below), this turns
+        // the popover into a scrolling pane when content exceeds the
+        // available space — never overflows the viewport.
+        next.maxHeight = Math.max(
+          120,
+          window.innerHeight - r.bottom - offset - GUTTER,
+        )
       } else {
         next.bottom = window.innerHeight - r.top + offset
+        next.maxHeight = Math.max(120, r.top - offset - GUTTER)
       }
+      // Always allow internal scroll; the consuming popover's own CSS
+      // can override `maxHeight` via `min(...)` if it wants a tighter cap.
+      next.overflowY = 'auto'
       if (align === 'start') {
         // Keep the popover on-screen — clamp left to a small viewport gutter.
-        const left = Math.max(8, Math.min(r.left, window.innerWidth - popW - 8))
+        const left = Math.max(
+          GUTTER,
+          Math.min(r.left, window.innerWidth - popW - GUTTER),
+        )
         next.left = left
       } else {
-        const right = Math.max(8, Math.min(window.innerWidth - r.right, window.innerWidth - popW - 8))
+        const right = Math.max(
+          GUTTER,
+          Math.min(
+            window.innerWidth - r.right,
+            window.innerWidth - popW - GUTTER,
+          ),
+        )
         next.right = right
       }
       if (matchAnchorWidth) {
@@ -120,11 +150,23 @@ function Popover({
     // decision). One animation frame is enough for the typical case.
     const raf = requestAnimationFrame(update)
     window.addEventListener('resize', update)
-    window.addEventListener('scroll', update, true)
+    // Capture-phase scroll listener catches scroll on every ancestor +
+    // descendant of the document. We *want* it to fire when an ancestor
+    // (page, sidebar) scrolls — anchor moves with the layout. We do NOT
+    // want it firing when the user scrolls inside the popover itself —
+    // that doesn't move the anchor, and re-running `update` flickers the
+    // placement when content scrolls underneath.
+    const onScrollCapture = (e: Event) => {
+      const target = e.target as Node | null
+      const pop = popoverRef.current
+      if (target && pop && pop.contains(target)) return
+      update()
+    }
+    window.addEventListener('scroll', onScrollCapture, true)
     return () => {
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', update)
-      window.removeEventListener('scroll', update, true)
+      window.removeEventListener('scroll', onScrollCapture, true)
     }
   }, [anchorRef, placement, offset, matchAnchorWidth])
 

@@ -1,6 +1,10 @@
 import { useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Search } from 'lucide-react'
-import { COMMON_SYSTEM_FONTS, fontIsAvailable } from '../../lib/fontLoader'
+import {
+  COMMON_GOOGLE_FONTS,
+  COMMON_SYSTEM_FONTS,
+  fontIsAvailable,
+} from '../../lib/fontLoader'
 import Popover from '../Popover'
 import Tooltip from '../Tooltip'
 
@@ -10,30 +14,57 @@ type Props = {
   /** Weight used by the live preview swatch — keeps the menu's previews
    *  consistent with whatever weight the user picked in the parent. */
   previewWeight?: number
+  /** Which curated list to surface. `system` keeps the original behaviour;
+   *  `google` swaps the list to popular Google Fonts. The picker doesn't
+   *  load fonts itself — the parent calls `loadFont` separately when the
+   *  selection changes. */
+  source?: 'system' | 'google'
+  /** Optional explicit list of families to show instead of the curated
+   *  defaults. Used by the Google-Fonts paste flow to surface families
+   *  the user has actually parsed from embed URLs — bypasses the built-in
+   *  popular list when the user wants something more specific. */
+  families?: readonly string[]
 }
 
 /** Pick a system font with each name rendered in its own family. Replaces
  *  the bare `<datalist>` so users can actually *see* what they're choosing
  *  before committing. Uses the shared `Popover` so click-outside / Esc /
  *  focus return / portal escape behave consistently with other menus. */
-function FontFamilyPicker({ value, onChange, previewWeight = 500 }: Props) {
+function FontFamilyPicker({
+  value,
+  onChange,
+  previewWeight = 500,
+  source = 'system',
+  families,
+}: Props) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const triggerRef = useRef<HTMLButtonElement>(null)
 
-  // Pre-compute installed-vs-fallback once per render — cheap (≤30 fonts).
+  // Explicit list wins; otherwise fall back to the curated dropdown for
+  // the chosen source.
+  const allFonts: readonly string[] = families
+    ? families
+    : source === 'google'
+      ? COMMON_GOOGLE_FONTS
+      : COMMON_SYSTEM_FONTS
+  const isSystem = source === 'system'
+
+  // Pre-compute installed-vs-fallback for system fonts — Google fonts
+  // are always "available" because the loader injects the stylesheet on
+  // demand, so the indicator only fires for the system source.
   const availability = useMemo(() => {
+    if (!isSystem) return new Map<string, boolean>()
     const map = new Map<string, boolean>()
-    for (const f of COMMON_SYSTEM_FONTS)
-      map.set(f, fontIsAvailable(f, previewWeight))
+    for (const f of allFonts) map.set(f, fontIsAvailable(f, previewWeight))
     return map
-  }, [previewWeight])
+  }, [isSystem, allFonts, previewWeight])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return COMMON_SYSTEM_FONTS
-    return COMMON_SYSTEM_FONTS.filter((f) => f.toLowerCase().includes(q))
-  }, [query])
+    if (!q) return allFonts
+    return allFonts.filter((f) => f.toLowerCase().includes(q))
+  }, [allFonts, query])
 
   const closeMenu = () => {
     setOpen(false)
@@ -116,15 +147,21 @@ function FontFamilyPicker({ value, onChange, previewWeight = 500 }: Props) {
                     >
                       {f}
                     </span>
-                    {installed ? (
+                    {isSystem && installed && (
                       <Tooltip content="Installed on this system">
                         <span className="font-picker-item-tag">✓</span>
                       </Tooltip>
-                    ) : (
+                    )}
+                    {isSystem && !installed && (
                       <Tooltip content="Not detected — will fall back to default">
                         <span className="font-picker-item-tag font-picker-item-fallback">
                           fallback
                         </span>
+                      </Tooltip>
+                    )}
+                    {!isSystem && (
+                      <Tooltip content="Fetched from fonts.googleapis.com on demand">
+                        <span className="font-picker-item-tag">cloud</span>
                       </Tooltip>
                     )}
                     {selected && <Check size={12} aria-hidden />}

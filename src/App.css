@@ -692,6 +692,137 @@
   color: var(--text);
 }
 
+/* Multi-slot text override grid — one labelled input per slot so the user
+ * can switch "Jan/Feb/…" to "JAN/FEB/…" or to a translated set. The
+ * `<header>` carries the section label + a reset button; the grid below
+ * auto-fits to the panel width. */
+.fontgen-glyph-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+
+  > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+
+    span {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text);
+    }
+  }
+}
+.fontgen-glyph-inputs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 6px;
+}
+.fontgen-glyph-input {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  span {
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--text);
+  }
+  input {
+    font: inherit;
+    font-size: 13px;
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text-h);
+    width: 100%;
+    box-sizing: border-box;
+  }
+}
+.fontgen-reset {
+  padding: 2px 8px !important;
+  font-size: 11px !important;
+  margin: 0 !important;
+}
+
+/* Google Fonts panel inside FontGenerator's Source section. Holds the
+ * paste-the-embed input, the Open-Google link, the "How to use" details,
+ * and the family picker bound to the user's saved fonts. */
+.fontgen-google {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fontgen-google-help {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--social-bg);
+  font-size: 11.5px;
+  color: var(--text);
+
+  summary {
+    cursor: pointer;
+    color: var(--text-h);
+    font-weight: 500;
+  }
+
+  ol {
+    margin: 6px 0 0;
+    padding-left: 20px;
+
+    li {
+      margin: 4px 0;
+    }
+  }
+
+  a {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--accent);
+    text-decoration: none;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+.fontgen-google-embed {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text-h);
+  resize: vertical;
+  min-height: 40px;
+}
+.fontgen-google-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+
+  .counter {
+    margin: 0;
+  }
+}
+.fontgen-google-link {
+  text-decoration: none;
+}
+.fontgen-google-clear {
+  margin-left: auto !important;
+}
+.fontgen-google-error {
+  color: #ff6e6e;
+}
+
 /* The "text" input for single-slot kinds — sits above the dim / size /
  * colour rows in the parameters section. Wider than a normal `.prop-field`
  * since users type words ("AM", "PM", "KM") not just digits. */
@@ -1725,6 +1856,16 @@
   gap: 6px;
   margin-bottom: 8px;
   flex-wrap: nowrap;
+  /* Same sticky pattern as `.layer-add-bar` — pin to the top of the
+   * scroll container while the Guides section is on-screen, then hand
+   * off to `.asset-library-header` once the user scrolls past the
+   * guides list. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding-top: 4px;
+  padding-bottom: 4px;
 
   h4 {
     margin: 0;
@@ -1962,6 +2103,18 @@
   justify-content: space-between;
   margin-bottom: 12px;
   gap: 8px;
+
+  /* Stick to the top of `.editor-pane-scroll-sticky` so the "Layers"
+   * heading + Insert button stay visible while the user scrolls through
+   * the layer list. The Guides and Asset library headers further down
+   * also stick — natural CSS sticky stacking handoff means each section
+   * heading owns the slot only while its content is on-screen. */
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  background: var(--bg);
+  padding: 8px 0;
+  margin-bottom: 4px;
 
   h3 {
     margin: 0;
@@ -3213,6 +3366,15 @@
    * (240px) so we let the title truncate if it has to, but in practice
    * "Asset library + count chip" + two compact buttons fits comfortably. */
   flex-wrap: nowrap;
+  /* Third sticky header in the editor pane. CSS sticky stacking means
+   * this one pushes the Guides header out as soon as the Asset library
+   * section reaches the top of the scroll container. */
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--bg);
+  padding-top: 4px;
+  padding-bottom: 4px;
 
   h4 {
     margin: 0;
@@ -5364,6 +5526,351 @@
 
   .counter {
     margin-bottom: 0;
+  }
+}
+
+/* Clean Insertable picker popover. Replaces the older `.insert-menu`
+ * inline-expansion model. Each row shows just the type name + slot count
+ * + an (i) icon — clicking the name (or the icon) opens the matching
+ * modal where the create paths live. The hover card off (i) is just a
+ * Tooltip whose content renders `<InsertableInfoCard>`. */
+.insertable-picker-popover {
+  width: 280px;
+  /* Height is clamped dynamically in `Popover.tsx` based on the space
+   * available below (or above) the anchor — combined with the inline
+   * `overflow-y: auto` that the popover sets, the list scrolls in place
+   * instead of overflowing the viewport. */
+  padding: 6px 0;
+  /* `overscroll-behavior: contain` keeps the page from scrolling when
+   * the user wheels past the popover's top/bottom. */
+  overscroll-behavior: contain;
+}
+.insertable-picker-filter {
+  margin: 6px 8px 8px;
+  padding: 6px 10px;
+  width: calc(100% - 16px);
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  box-sizing: border-box;
+}
+.insertable-picker-group {
+  display: flex;
+  flex-direction: column;
+}
+.insertable-picker-section {
+  padding: 8px 12px 4px;
+  font-size: 10px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text);
+}
+.insertable-picker-row {
+  display: flex;
+  align-items: stretch;
+
+  &.disabled {
+    opacity: 0.4;
+  }
+}
+.insertable-picker-name {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-h);
+  font: inherit;
+  font-size: 13px;
+
+  &:hover:not(:disabled) {
+    background: var(--social-bg);
+  }
+  &:disabled {
+    cursor: not-allowed;
+  }
+}
+.insertable-picker-count {
+  display: inline-block;
+  padding: 0 6px;
+  font-size: 10px;
+  font-family: var(--mono);
+  border-radius: 999px;
+  background: var(--code-bg);
+  color: var(--text);
+}
+.insertable-picker-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  opacity: 0.6;
+
+  &:hover {
+    opacity: 1;
+    color: var(--accent);
+    background: var(--social-bg);
+  }
+}
+.insertable-picker-empty {
+  padding: 8px 12px;
+}
+
+/* Info card — used inside the (i) hover tooltip (compact) and at the
+ * top of the Insert modal (expanded). Same DOM, two variants. The card
+ * deliberately inherits text colour from its container so it works on
+ * both the inverted tooltip surface and the regular page background.
+ * Tokens (`var(--text-h)`, `var(--text)`) caused the compact variant to
+ * disappear inside `.tooltip` since the tooltip's background equals
+ * `var(--text-h)`. */
+.insertable-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 240px;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  /* Reset `white-space: pre-line` inherited from `.tooltip` — it forces
+   * newlines between sibling block elements which collapses the dl
+   * grid into a vertical stack. */
+  white-space: normal;
+  color: inherit;
+
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+
+    strong {
+      font-size: 13px;
+      color: inherit;
+    }
+    code {
+      font-size: 10px;
+      /* Slight tint of the parent surface — works on both light tooltip
+       * and dark expanded card. */
+      background: rgba(127, 127, 127, 0.22);
+      color: inherit;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+  }
+
+  p {
+    margin: 0;
+    /* Mute the description by ~25% via opacity instead of swapping to a
+     * named token (which would map to a fixed colour and break on the
+     * inverted surface). */
+    opacity: 0.85;
+  }
+
+  dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 2px 10px;
+    margin: 0;
+    font-size: 11px;
+
+    dt {
+      font-family: var(--mono);
+      text-transform: lowercase;
+      opacity: 0.7;
+    }
+    dd {
+      margin: 0;
+      font-variant-numeric: tabular-nums;
+      color: inherit;
+    }
+  }
+}
+.insertable-info-card-expanded {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--social-bg);
+  color: var(--text-h);
+
+  p {
+    opacity: 1;
+    color: var(--text);
+  }
+  dl dt {
+    opacity: 1;
+    color: var(--text);
+  }
+}
+
+/* Widen the tooltip when it's hosting an info card — the default 280 px
+ * cap is fine for one-line hints but clips the card's dl grid. */
+.tooltip:has(.insertable-info-card) {
+  max-width: 360px;
+}
+
+/* Insert / New-asset modal: a slightly wider modal with a header card +
+ * a grid of "path" tiles for the create options. */
+.insert-modal {
+  flex-direction: column;
+  max-width: 640px;
+  gap: 0;
+}
+.insert-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+}
+.insert-modal-title {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text-h);
+}
+.insert-modal-paths {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+.insert-modal-path {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    h3 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-h);
+    }
+  }
+  .hint {
+    margin: 0;
+    flex: 1 1 auto;
+  }
+  .counter {
+    margin: 0;
+    align-self: flex-start;
+  }
+}
+.insert-modal-path-wide {
+  /* "Use existing asset" needs more space for the inline picker list. */
+  grid-column: 1 / -1;
+}
+.insert-modal-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  input {
+    width: 64px;
+    padding: 3px 6px;
+    font-size: 12px;
+    font-family: var(--mono);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg);
+    color: var(--text-h);
+  }
+}
+.insert-modal-share-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.insert-modal-share-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text-h);
+
+  &:hover:not(:disabled) {
+    border-color: var(--accent-border);
+    background: var(--social-bg);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+.insert-modal-share-thumb {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--code-bg);
+  border-radius: 4px;
+  overflow: hidden;
+
+  img {
+    max-width: 100%;
+    max-height: 100%;
+  }
+}
+.insert-modal-share-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+
+  strong {
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  small {
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--text);
   }
 }
 

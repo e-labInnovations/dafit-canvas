@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Type, Upload, X } from 'lucide-react'
+import { Cloud, ExternalLink, Trash2, Type, Upload, X } from 'lucide-react'
 import { useEditor } from '../../store/editorStore'
 import {
+  clearCachedGoogleFonts,
   fontIsAvailable,
+  loadCachedGoogleFonts,
   loadFont,
+  parseGoogleFontsEmbed,
+  saveCachedGoogleFonts,
   type LoadedFont,
+  type ParsedGoogleFont,
 } from '../../lib/fontLoader'
 import {
   rasterizeGlyphs,
@@ -51,6 +56,11 @@ type Props = {
 type FontPick =
   | { kind: 'system'; family: string }
   | { kind: 'upload'; file: File | null; family: string }
+  /** `href` is the stylesheet URL the family came from. The loader uses
+   *  it verbatim so the user's weight/italic/subset selections from
+   *  Google's site are honoured. Empty string → loader builds a default
+   *  minimal URL (used by the curated-list fallback). */
+  | { kind: 'google'; family: string; href: string }
 
 const DEFAULT_TARGET_FACEN_GLYPHS = ['0','1','2','3','4','5','6','7','8','9']
 
@@ -105,7 +115,20 @@ function FontGenerator({ target, onClose }: Props) {
     setCustomGlyphs([...presetGlyphs])
   }
 
-  const editableGlyphs = presetGlyphs.length === 1
+  // Every kind is now editable per-slot. Single-slot kinds (SEPERATOR,
+  // AM/PM, KM/MI) render one text field; multi-slot kinds (DAY_NAME,
+  // MONTH_NAME, digits, …) render N fields so the user can override
+  // individual slot labels — e.g. switch "Jan/Feb/…" to "JAN/FEB/…" or
+  // translate to another language. A Reset button restores the preset.
+  const editableSingleText = presetGlyphs.length === 1
+  const onResetGlyphs = () => setCustomGlyphs([...presetGlyphs])
+  const onPatchGlyph = (idx: number, value: string) => {
+    setCustomGlyphs((prev) => {
+      const next = prev.slice()
+      next[idx] = value
+      return next
+    })
+  }
 
   // ----- font picker state -----
   const [pick, setPick] = useState<FontPick>({
@@ -115,6 +138,15 @@ function FontGenerator({ target, onClose }: Props) {
   const [loaded, setLoaded] = useState<LoadedFont | null>(null)
   const [fontError, setFontError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Cached Google Fonts the user has previously parsed via the embed
+  // input. Hydrated from localStorage on first mount. Adding new ones
+  // (via paste + parse) merges in by family name and persists.
+  const [cachedGoogleFonts, setCachedGoogleFonts] = useState<
+    ParsedGoogleFont[]
+  >(() => loadCachedGoogleFonts())
+  const [embedInput, setEmbedInput] = useState('')
+  const [embedError, setEmbedError] = useState<string | null>(null)
 
   // ----- glyph params -----
   const [size, setSize] = useState(28)
@@ -176,6 +208,35 @@ function FontGenerator({ target, onClose }: Props) {
         kind: 'upload',
         family: pick.file.name.replace(/\.[^.]+$/, ''),
         file: pick.file,
+      })
+        .then((lf) => {
+          if (cancelled) return
+          setLoaded(lf)
+          setFontError(null)
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return
+          setLoaded(null)
+          setFontError(err instanceof Error ? err.message : String(err))
+        })
+      return () => {
+        cancelled = true
+      }
+    }
+
+    if (pick.kind === 'google') {
+      const family = pick.family.trim()
+      if (!family) return
+      // Loader injects a <link rel="stylesheet"> for the family + weight
+      // and waits for `document.fonts.load(...)` — we just react to the
+      // promise resolving / rejecting. When `href` is set (from a parsed
+      // embed) we use that URL verbatim so user-chosen weights/italics
+      // are preserved; otherwise the loader builds a default minimal URL.
+      loadFont({
+        kind: 'google',
+        family,
+        weight,
+        href: pick.href || undefined,
       })
         .then((lf) => {
           if (cancelled) return
@@ -304,9 +365,30 @@ function FontGenerator({ target, onClose }: Props) {
                 <input
                   type="radio"
                   checked={pick.kind === 'system'}
-                  onChange={() => setPick({ kind: 'system', family: pick.kind === 'system' ? pick.family : 'Arial' })}
+                  onChange={() =>
+                    setPick({
+                      kind: 'system',
+                      family: pick.kind === 'system' ? pick.family : 'Arial',
+                    })
+                  }
                 />
                 <Type size={14} aria-hidden /> System
+              </label>
+              <label className="fontgen-radio">
+                <input
+                  type="radio"
+                  checked={pick.kind === 'google'}
+                  onChange={() =>
+                    setPick({
+                      kind: 'google',
+                      family: pick.kind === 'google' ? pick.family : 'Roboto',
+                      // Stay on whatever URL was last loaded; "" falls
+                      // back to the loader's minimal default.
+                      href: pick.kind === 'google' ? pick.href : '',
+                    })
+                  }
+                />
+                <Cloud size={14} aria-hidden /> Google Fonts
               </label>
               <label className="fontgen-radio">
                 <input
@@ -331,6 +413,165 @@ function FontGenerator({ target, onClose }: Props) {
                   previewWeight={weight}
                 />
               </label>
+            )}
+
+            {pick.kind === 'google' && (
+              <div className="fontgen-google">
+                <details className="fontgen-google-help">
+                  <summary>How to add a Google Font</summary>
+                  <ol>
+                    <li>
+                      Open{' '}
+                      <a
+                        href="https://fonts.google.com/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        fonts.google.com
+                        <ExternalLink size={11} aria-hidden />
+                      </a>
+                      .
+                    </li>
+                    <li>
+                      Pick a font, choose the styles/weights you want, and
+                      click <strong>Get embed code</strong>.
+                    </li>
+                    <li>
+                      Copy the <code>&lt;link&gt;</code> tag (or just the
+                      URL / <code>@import</code> rule).
+                    </li>
+                    <li>
+                      Paste it below and press <strong>Add</strong>. The
+                      families show up in the dropdown for re-use across
+                      sessions.
+                    </li>
+                  </ol>
+                </details>
+
+                <label className="prop-field">
+                  <span>Google Fonts embed</span>
+                  <textarea
+                    className="fontgen-google-embed"
+                    value={embedInput}
+                    onChange={(e) => {
+                      setEmbedInput(e.target.value)
+                      setEmbedError(null)
+                    }}
+                    placeholder='Paste <link href="https://fonts.googleapis.com/css2?family=…"> or the URL'
+                    rows={3}
+                    spellCheck={false}
+                  />
+                </label>
+                <div className="fontgen-google-actions">
+                  <button
+                    type="button"
+                    className="counter"
+                    onClick={() => {
+                      const parsed = parseGoogleFontsEmbed(embedInput)
+                      if (!parsed) {
+                        setEmbedError(
+                          "Couldn't find a Google Fonts URL in the input. " +
+                            'Expected a <link> tag, an @import rule, or a ' +
+                            'fonts.googleapis.com/css2 URL.',
+                        )
+                        return
+                      }
+                      const merged = saveCachedGoogleFonts(
+                        cachedGoogleFonts,
+                        parsed,
+                      )
+                      setCachedGoogleFonts(merged)
+                      setEmbedInput('')
+                      setEmbedError(null)
+                      // Auto-pick the first newly-parsed family so the
+                      // preview updates immediately. Subsequent picks
+                      // happen via the family dropdown.
+                      const first = parsed[0]
+                      setPick({
+                        kind: 'google',
+                        family: first.family,
+                        href: first.href,
+                      })
+                    }}
+                    disabled={!embedInput.trim()}
+                  >
+                    Add
+                  </button>
+                  <a
+                    href="https://fonts.google.com/"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="counter ghost fontgen-google-link"
+                  >
+                    <ExternalLink size={14} aria-hidden />
+                    Open Google Fonts
+                  </a>
+                  {cachedGoogleFonts.length > 0 && (
+                    <button
+                      type="button"
+                      className="counter ghost fontgen-google-clear"
+                      onClick={() => {
+                        if (
+                          !window.confirm(
+                            'Clear all saved Google Fonts? This only removes them from this editor — anything already rasterized stays put.',
+                          )
+                        ) {
+                          return
+                        }
+                        clearCachedGoogleFonts()
+                        setCachedGoogleFonts([])
+                      }}
+                    >
+                      <Trash2 size={14} aria-hidden />
+                      Clear saved
+                    </button>
+                  )}
+                </div>
+                {embedError && (
+                  <p className="hint fontgen-google-error">{embedError}</p>
+                )}
+
+                <label className="prop-field">
+                  <span>Family</span>
+                  <FontFamilyPicker
+                    source="google"
+                    value={pick.family}
+                    onChange={(family) => {
+                      // If the picked family matches one in the cache,
+                      // use its exact href so user-chosen weights/italics
+                      // are preserved; otherwise empty href → loader
+                      // builds a default minimal URL.
+                      const hit = cachedGoogleFonts.find(
+                        (g) => g.family === family,
+                      )
+                      setPick({
+                        kind: 'google',
+                        family,
+                        href: hit?.href ?? '',
+                      })
+                    }}
+                    previewWeight={weight}
+                    // Cached families first (sorted alphabetically) so the
+                    // user sees what they've pasted at the top; the
+                    // curated popular list still surfaces via Enter on
+                    // any unmatched query.
+                    families={
+                      cachedGoogleFonts.length > 0
+                        ? cachedGoogleFonts
+                            .map((g) => g.family)
+                            .sort((a, b) => a.localeCompare(b))
+                        : undefined
+                    }
+                  />
+                </label>
+                <p className="hint">
+                  Google fetches the stylesheet from{' '}
+                  <code>fonts.googleapis.com</code> on demand. Pasting the
+                  embed preserves the exact weights/italics you picked on
+                  Google's site — the editor's own weight slider below
+                  applies on top.
+                </p>
+              </div>
             )}
 
             {pick.kind === 'upload' && (
@@ -358,7 +599,7 @@ function FontGenerator({ target, onClose }: Props) {
 
           <section className="fontgen-section">
             <h3>Glyph parameters</h3>
-            {editableGlyphs && (
+            {editableSingleText && (
               <label className="prop-field fontgen-text-field">
                 <span>text</span>
                 <input
@@ -369,6 +610,35 @@ function FontGenerator({ target, onClose }: Props) {
                   autoFocus
                 />
               </label>
+            )}
+            {!editableSingleText && (
+              <div className="fontgen-glyph-grid">
+                <header>
+                  <span>Slot text</span>
+                  <button
+                    type="button"
+                    className="counter ghost fontgen-reset"
+                    onClick={onResetGlyphs}
+                  >
+                    Reset to defaults
+                  </button>
+                </header>
+                <div className="fontgen-glyph-inputs">
+                  {customGlyphs.map((g, i) => (
+                    <label key={i} className="fontgen-glyph-input">
+                      <span>{presetGlyphs[i] ?? i}</span>
+                      <input
+                        type="text"
+                        value={g}
+                        onChange={(e) => onPatchGlyph(i, e.target.value)}
+                        spellCheck={false}
+                        autoCorrect="off"
+                        autoCapitalize="off"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
             )}
             <div className="prop-row">
               <label className="prop-field">

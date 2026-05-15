@@ -1972,6 +1972,89 @@ export const consumersOf = (
   setId: string,
 ): TypeCLayer[] => project.layers.filter((l) => l.assetSetId === setId)
 
+const DIGIT_TYPES = new Set([
+  0x40, 0x41, 0x43, 0x44, // TIME H1/H2/M1/M2
+  0x30, 0x11, 0x12, 0x6b, 0x6c, // DAY_NUM, MONTH_NUM, YEAR, *_B
+  0x62, 0x63, 0x64, // STEPS / _CA / _RA
+  0x65, 0x66, 0x67, // HR / _CA / _RA
+  0x68, // KCAL
+  0x72, 0x73, 0x74, // STEPS_B*
+  0x76, // STEPS_GOAL
+  0x82, 0x83, 0x84, // HR_B*
+  0x92, 0x93, 0x94, // KCAL_B*
+  0xa2, 0xa3, 0xa4, // DIST / _CA / _RA
+  0xd2, 0xd3, 0xd4, // BATT / _CA / _RA
+  0x47, 0x48, // DIGIT_PAIR
+  0x69, // generic 10-digit
+])
+
+const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+]
+// ICON_SET_D6 (0xd6) is 9 slots. Empirically (and per the Gadgetbridge
+// weather constants) the 8 weather conditions map to indices 0..7 in
+// the same order as `CMD_NOTIFY_WEATHER_CHANGE` payloads; slot 8 is a
+// fallback / "unknown" icon. Naming them lets the user paint the right
+// glyph at the right index without trial-and-error.
+const WEATHER_ICON_NAMES = [
+  'Cloudy', 'Foggy', 'Overcast', 'Rainy', 'Snowy', 'Sunny',
+  'Sandstorm', 'Haze', 'Unknown',
+]
+// WEATHER_TEMP* are 13 slots. The firmware paints a signed temperature
+// (e.g. "-12°"), so it needs digits 0-9 plus a sign and a degree mark.
+// Slot 12's purpose isn't fully documented — corpus inspection suggests
+// a thin separator / dot used between digit groups on some firmwares.
+// Naming them as digits + symbols beats raw indices for the user.
+const WEATHER_TEMP_NAMES = [
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+  '−', '°', '·',
+]
+
+/** Human-readable name for a slot inside an AssetSet. Pass the consuming
+ *  layer's type when known — that's what tells us whether a 10-slot set
+ *  is "digits 0..9" or some other 10-thing. Falls back to the numeric
+ *  index for orphan sets / unknown types. */
+export const slotLabelForType = (
+  type: number | undefined,
+  idx: number,
+  count: number,
+): string => {
+  if (type === undefined) return String(idx)
+
+  if (DIGIT_TYPES.has(type)) return idx < 10 ? String(idx) : String(idx)
+
+  if (type === 0x60 || type === 0x61) {
+    return DAY_NAMES[idx] ?? String(idx)
+  }
+  if (type === 0x10) {
+    return MONTH_NAMES[idx] ?? String(idx)
+  }
+  if (type === 0xd6) {
+    return WEATHER_ICON_NAMES[idx] ?? String(idx)
+  }
+  if (type === 0xd7 || type === 0xd8 || type === 0xd9) {
+    return WEATHER_TEMP_NAMES[idx] ?? String(idx)
+  }
+  // Progress bars: 0%, 10%, …, 100% over 11 slots.
+  if (type === 0x70 || type === 0x80 || type === 0x90 || type === 0xa0) {
+    return `${idx * 10}%`
+  }
+  // Battery icons: 11 slots → 0..100% in 10% steps; other counts fall
+  // back to raw indices since the level scheme isn't fixed.
+  if (type === 0xda) {
+    if (count === 11) return `${idx * 10}%`
+    return String(idx)
+  }
+  // BACKGROUNDS — 240×24 horizontal strips painted top-to-bottom.
+  if (type === 0x00) return `Strip ${idx}`
+  // Animations — frames in playback order.
+  if (type >= 0xf6 && type <= 0xf8) return `Frame ${idx}`
+
+  return String(idx)
+}
+
 /** Existing sets that are dimension-compatible with the given type (same
  *  count). Used to populate "Share with…" pickers. */
 export const compatibleSetsForType = (

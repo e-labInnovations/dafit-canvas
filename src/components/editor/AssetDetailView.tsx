@@ -12,9 +12,11 @@ import {
 import { useEditor } from '../../store/editorStore'
 import {
   TYPEC_FONT_INSERTABLE,
+  TYPEC_INSERTABLE_TYPES,
   consumersOf,
   decodeBmpFile,
   defaultGlyphTextForType,
+  slotLabelForType,
 } from '../../lib/projectIO'
 import BmpPixelEditor from './BmpPixelEditor'
 import Tooltip from '../Tooltip'
@@ -52,6 +54,7 @@ function SlotRow({
   setName,
   setCount,
   slotIdx,
+  slotLabel,
   width,
   height,
   slot,
@@ -61,6 +64,10 @@ function SlotRow({
   setName: string
   setCount: number
   slotIdx: number
+  /** Human-readable label (e.g. "Sun", "Cloudy", "Frame 3"). Falls back
+   *  to the raw index for orphan/unknown sets. Computed by the parent so
+   *  this row stays a dumb leaf. */
+  slotLabel: string
   width: number
   height: number
   slot: AssetSlot
@@ -128,12 +135,18 @@ function SlotRow({
     <li className="asset-detail-slot">
       <div className="asset-detail-thumb">
         {url ? (
-          <img src={url} alt={`slot ${slotIdx}`} style={{ imageRendering: 'pixelated' }} />
+          <img
+            src={url}
+            alt={`${slotLabel}`}
+            style={{ imageRendering: 'pixelated' }}
+          />
         ) : (
           <span className="asset-empty">empty</span>
         )}
       </div>
-      <code className="asset-detail-slot-label">{slotIdx}</code>
+      <code className="asset-detail-slot-label" title={`Slot ${slotIdx}`}>
+        {slotLabel}
+      </code>
       <div className="asset-detail-slot-actions">
         <Tooltip content="Edit BMP (crop, draw, filters, resize)">
           <button
@@ -509,6 +522,19 @@ function AssetDetailView({ setId, hasLayerContext, onClose }: Props) {
             setName={set.name}
             setCount={set.count}
             slotIdx={i}
+            slotLabel={slotLabelForType(
+              // First consumer's type drives the labels — multiple
+              // consumers always share a compatible family per the
+              // protocol, so picking [0] is safe. For orphan sets (no
+              // consumer yet), fall back to matching the set's name
+              // against the type table; that's why ICON_SET_D6 or
+              // WEATHER_TEMP_CA still get their proper labels even
+              // before a layer binds to them.
+              consumers[0]?.type ??
+                TYPEC_INSERTABLE_TYPES.find((t) => t.name === set.name)?.type,
+              i,
+              set.count,
+            )}
             width={set.width}
             height={set.height}
             slot={slot}

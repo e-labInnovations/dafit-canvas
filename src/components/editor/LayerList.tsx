@@ -3,7 +3,6 @@ import {
   EyeOff,
   GripVertical,
   Hash,
-  Info,
   Layers,
   Minus,
   Plus,
@@ -16,20 +15,17 @@ import { useMemo, useRef, useState } from 'react'
 import { useEditor } from '../../store/editorStore'
 import {
   FACEN_INSERTABLE,
-  INSERTABLE_CATEGORIES,
-  TYPEC_INSERTABLE_TYPES,
-  compatibleSetsForType,
   decodeBmpFile,
-  insertableMeta,
   listLayers,
   type FaceNDigitDependentKind,
   type FaceNInsertableKind,
-  type InsertableCategory,
+  type InsertableType,
 } from '../../lib/projectIO'
 import AssetLibrary from './AssetLibrary'
 import FontGenerator, { type FontTarget } from './FontGenerator'
+import InsertablePickerList from './InsertablePickerList'
+import InsertLayerModal from './InsertLayerModal'
 import Popover from '../Popover'
-import { assetSetThumbDataUrl } from '../../lib/assetThumb'
 import Tooltip from '../Tooltip'
 
 const FACEN_DEPENDENT_KINDS: FaceNDigitDependentKind[] = [
@@ -52,9 +48,6 @@ function LayerList() {
   const selectMany = useEditor((s) => s.selectMany)
   const moveLayerTo = useEditor((s) => s.moveLayerTo)
   const remove = useEditor((s) => s.deleteLayer)
-  const insertTypeC = useEditor((s) => s.insertTypeC)
-  const insertTypeCEmpty = useEditor((s) => s.insertTypeCEmpty)
-  const insertTypeCShared = useEditor((s) => s.insertTypeCShared)
   const insertFaceN = useEditor((s) => s.insertFaceN)
   const insertFaceNDigitElementAction = useEditor(
     (s) => s.insertFaceNDigitElementAction,
@@ -68,15 +61,19 @@ function LayerList() {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const insertBtnRef = useRef<HTMLButtonElement>(null)
+  // FaceN inserts still use the hidden-file-input pattern; Type C now goes
+  // through `InsertLayerModal` which manages its own picker, so the
+  // pending-pick ref only ever holds FaceN intent.
   const pendingRef = useRef<
-    | { mode: 'typeC'; type: number }
     | { mode: 'faceN'; kind: FaceNInsertableKind; imageCount: number }
     | null
   >(null)
   const [showInsert, setShowInsert] = useState(false)
-  const [expandedType, setExpandedType] = useState<number | null>(null)
-  const [helpType, setHelpType] = useState<number | null>(null)
-  const [insertFilter, setInsertFilter] = useState('')
+  /** When non-null, the Insert Layer modal is open for that Type C
+   *  insertable. Picking a row in the picker closes the popover and
+   *  sets this — the modal then owns the 4 create paths. */
+  const [insertModalType, setInsertModalType] =
+    useState<InsertableType | null>(null)
   const [fontTarget, setFontTarget] = useState<FontTarget | null>(null)
   // Drag-to-reorder state. `dragIdx` is the layer being dragged
   // (project-array index, not row position). `dragOver` is the layer
@@ -95,36 +92,6 @@ function LayerList() {
     input.multiple = multiple
     input.value = ''
     input.click()
-  }
-
-  const onInsertTypeC = (type: number) => {
-    setShowInsert(false)
-    pendingRef.current = { mode: 'typeC', type }
-    triggerPick(false)
-  }
-
-  /** Animation layers (0xf6/0xf7/0xf8) need a project-wide frame count to
-   *  produce a useful asset set — without it the new set lands at 1 slot
-   *  (max(1, animationFrames)) and the user can't tell why. Prompt for
-   *  the count here, set it, and return whether the caller should proceed
-   *  with the insert. */
-  const ensureAnimFrames = (type: number): boolean => {
-    if (type < 0xf6 || type > 0xf8) return true
-    if (!project || project.format !== 'typeC') return true
-    if (project.animationFrames >= 2) return true
-    const ans = window.prompt(
-      'Animation needs a frame count. How many frames?\n(2–250, shared across all animation layers on this face)',
-      '10',
-    )
-    if (ans === null) return false
-    const n = parseInt(ans, 10)
-    if (!Number.isFinite(n) || n < 2 || n > 250) return false
-    const err = useEditor.getState().setAnimationFramesAction(n)
-    if (err) {
-      setError(err)
-      return false
-    }
-    return true
   }
 
   const onInsertFaceN = (kind: FaceNInsertableKind, imageCount: number) => {
@@ -159,18 +126,13 @@ function LayerList() {
     if (!pending || files.length === 0) return
 
     try {
-      if (pending.mode === 'typeC') {
-        const bmp = await decodeBmpFile(files[0])
-        insertTypeC(pending.type, bmp)
-      } else {
-        const bitmaps = await Promise.all(files.map(decodeBmpFile))
-        if (pending.imageCount > 0 && bitmaps.length < pending.imageCount) {
-          throw new Error(
-            `Pick ${pending.imageCount} BMP(s); got ${bitmaps.length}. The rest will be inserted empty.`,
-          )
-        }
-        insertFaceN(pending.kind, bitmaps)
+      const bitmaps = await Promise.all(files.map(decodeBmpFile))
+      if (pending.imageCount > 0 && bitmaps.length < pending.imageCount) {
+        throw new Error(
+          `Pick ${pending.imageCount} BMP(s); got ${bitmaps.length}. The rest will be inserted empty.`,
+        )
       }
+      insertFaceN(pending.kind, bitmaps)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -178,6 +140,13 @@ function LayerList() {
 
   return (
     <aside className="editor-pane editor-layers">
+      {/* `.layer-add-bar` lives INSIDE `.editor-pane-scroll` so its sticky
+       *  positioning shares the scroll container with the Guides and
+       *  Asset library headers. The three pin-to-top in sequence as the
+       *  user scrolls — natural CSS sticky stacking pushes the current
+       *  one out when the next one's section reaches the top. */}
+      <div className="editor-pane-scroll editor-pane-scroll-sticky">
+      <div className="layers-section">
       <div className="layer-add-bar">
         <h3>Layers</h3>
         <button
@@ -203,241 +172,24 @@ function LayerList() {
           >
             <div className="editor-new-menu insert-menu" role="presentation">
               {project.format === 'typeC' && (
-                <>
-                  <input
-                    type="text"
-                    className="insert-menu-filter"
-                    placeholder="Filter types…"
-                    value={insertFilter}
-                    onChange={(e) => setInsertFilter(e.target.value)}
-                    autoFocus
-                  />
-                  {(() => {
-                    // Apply the filter once, then bucket the survivors by
-                    // category. Empty categories are skipped so the user
-                    // doesn't see a sea of dangling headers when filtering.
-                    const filtered = TYPEC_INSERTABLE_TYPES.filter((k) => {
-                      if (!insertFilter) return true
-                      const q = insertFilter.toLowerCase()
-                      return (
-                        k.name.toLowerCase().includes(q) ||
-                        `0x${k.type.toString(16).padStart(2, '0')}`.includes(q)
-                      )
-                    })
-                    const byCat = new Map<InsertableCategory, typeof filtered>()
-                    for (const k of filtered) {
-                      const cat = insertableMeta(k.type).category
-                      const list = byCat.get(cat)
-                      if (list) list.push(k)
-                      else byCat.set(cat, [k])
-                    }
-                    // The MOYOUNG protocol stores `animationFrames` once per
-                    // face (one u16 in the header). All 0xf6/0xf7/0xf8 layers
-                    // share that count, so a face with two animation layers
-                    // can't have different lengths. The corpus shows every
-                    // animated face has exactly one — enforce that here.
-                    const hasAnimLayer =
-                      project.format === 'typeC' &&
-                      project.layers.some(
-                        (l) => l.type >= 0xf6 && l.type <= 0xf8,
-                      )
-                    return INSERTABLE_CATEGORIES.flatMap((cat) => {
-                      const items = byCat.get(cat.id)
-                      if (!items || items.length === 0) return []
-                      return [
-                        <div
-                          key={`cat-${cat.id}`}
-                          className="insert-menu-section"
-                        >
-                          {cat.label}
-                        </div>,
-                        ...items.map((k) => {
-                          const isExpanded = expandedType === k.type
-                          const isHelpOpen = helpType === k.type
-                          const meta = insertableMeta(k.type)
-                          const sharable =
-                            k.count > 1
-                              ? compatibleSetsForType(project, k.type)
-                              : []
-                          const isAnimType = k.type >= 0xf6 && k.type <= 0xf8
-                          const animBlocked = isAnimType && hasAnimLayer
-                          return (
-                            <div
-                              key={`row-${k.type}`}
-                              className="insert-menu-multi"
-                            >
-                              <div className="insert-menu-row">
-                                <button
-                                  type="button"
-                                  className={
-                                    `insert-menu-name` +
-                                    (isExpanded ? ' insert-menu-row-active' : '')
-                                  }
-                                  onClick={() =>
-                                    setExpandedType(isExpanded ? null : k.type)
-                                  }
-                                >
-                                  {k.name}
-                                  <span className="insert-menu-tag">
-                                    {k.count}
-                                  </span>
-                                </button>
-                                <Tooltip content={`What is ${k.name}?`}>
-                                  <button
-                                    type="button"
-                                    className={
-                                      `insert-menu-info` +
-                                      (isHelpOpen ? ' active' : '')
-                                    }
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      setHelpType(isHelpOpen ? null : k.type)
-                                    }}
-                                    aria-label={`What is ${k.name}?`}
-                                  >
-                                    <Info size={12} aria-hidden />
-                                  </button>
-                                </Tooltip>
-                              </div>
-                              {isHelpOpen && (
-                                <div className="insert-menu-help">
-                                  {meta.description ? (
-                                    <p>{meta.description}</p>
-                                  ) : (
-                                    <p className="hint">
-                                      No description yet for this type.
-                                    </p>
-                                  )}
-                                  <dl className="insert-menu-help-meta">
-                                    <dt>Type code</dt>
-                                    <dd>
-                                      <code>
-                                        0x{k.type.toString(16).padStart(2, '0')}
-                                      </code>
-                                    </dd>
-                                    <dt>Slots</dt>
-                                    <dd>{k.count}</dd>
-                                    <dt>Default size</dt>
-                                    <dd>
-                                      {k.dim.w}×{k.dim.h}
-                                    </dd>
-                                    <dt>Seen in</dt>
-                                    <dd>
-                                      {k.faces} of 387 corpus faces
-                                    </dd>
-                                  </dl>
-                                </div>
-                              )}
-                              {isExpanded && k.count === 1 && (
-                                <>
-                                  {animBlocked && (
-                                    <div className="insert-menu-help">
-                                      <p>
-                                        Only one animation layer per face — the
-                                        protocol stores a single
-                                        <code> animationFrames</code> at the
-                                        header level, shared across all
-                                        <code> 0xf6/0xf7/0xf8</code> layers.
-                                        Delete the existing animation layer
-                                        first if you want to replace it.
-                                      </p>
-                                    </div>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className="insert-menu-sub"
-                                    onClick={() => {
-                                      if (!ensureAnimFrames(k.type)) return
-                                      setShowInsert(false)
-                                      setExpandedType(null)
-                                      insertTypeCEmpty(k.type)
-                                    }}
-                                    disabled={animBlocked}
-                                  >
-                                    ↳ Empty placeholder
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="insert-menu-sub"
-                                    onClick={() => {
-                                      if (!ensureAnimFrames(k.type)) return
-                                      setExpandedType(null)
-                                      onInsertTypeC(k.type)
-                                    }}
-                                    disabled={animBlocked}
-                                  >
-                                    ↳ Pick BMP file…
-                                  </button>
-                                </>
-                              )}
-                              {isExpanded && k.count > 1 && (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="insert-menu-sub"
-                                    onClick={() => {
-                                      if (!ensureAnimFrames(k.type)) return
-                                      setShowInsert(false)
-                                      setExpandedType(null)
-                                      insertTypeCEmpty(k.type)
-                                    }}
-                                  >
-                                    ↳ New empty library ({k.count} slots)
-                                  </button>
-                                  {sharable.map((set) => {
-                                    const thumb = assetSetThumbDataUrl(set)
-                                    return (
-                                      <button
-                                        key={`share-${set.id}`}
-                                        type="button"
-                                        className="insert-menu-sub insert-menu-share"
-                                        onClick={() => {
-                                          setShowInsert(false)
-                                          setExpandedType(null)
-                                          insertTypeCShared(k.type, set.id)
-                                        }}
-                                      >
-                                        <span
-                                          className="insert-menu-share-thumb"
-                                          aria-hidden
-                                        >
-                                          {thumb ? (
-                                            <img
-                                              src={thumb}
-                                              alt=""
-                                              style={{
-                                                imageRendering: 'pixelated',
-                                              }}
-                                            />
-                                          ) : (
-                                            <span className="asset-empty">
-                                              ∅
-                                            </span>
-                                          )}
-                                        </span>
-                                        <span className="insert-menu-share-text">
-                                          ↳ Use existing:{' '}
-                                          <strong>{set.name}</strong>
-                                        </span>
-                                      </button>
-                                    )
-                                  })}
-                                </>
-                              )}
-                            </div>
-                          )
-                        }),
-                      ]
-                    })
-                  })()}
-                  <p className="insert-menu-hint">
-                    Click a type to choose how to populate it. Use the{' '}
-                    <Info size={11} aria-hidden /> button on any row for a
-                    description and stats. Multi-blob layers can reuse an
-                    existing asset library — fill empty libraries later via{' '}
-                    <strong>Generate from font</strong>.
-                  </p>
-                </>
+                <InsertablePickerList
+                  onPick={(k) => {
+                    setShowInsert(false)
+                    setInsertModalType(k)
+                  }}
+                  isDisabled={(k) => {
+                    // MOYOUNG stores `animationFrames` once per face, so
+                    // only one 0xf6/0xf7/0xf8 layer is meaningful — block
+                    // a second insertion with a tooltip-style reason.
+                    if (k.type < 0xf6 || k.type > 0xf8) return null
+                    const has = project.layers.some(
+                      (l) => l.type >= 0xf6 && l.type <= 0xf8,
+                    )
+                    return has
+                      ? 'Only one animation layer per face — delete the existing one first.'
+                      : null
+                  }}
+                />
               )}
               {project.format === 'faceN' && (
                 <>
@@ -498,7 +250,6 @@ function LayerList() {
         )}
       </div>
 
-      <div className="editor-pane-scroll">
         {layers.length === 0 ? (
           <p className="hint">
             No layers yet. Use <strong>Insert</strong> to add one — BMP for
@@ -608,6 +359,7 @@ function LayerList() {
             })}
           </ul>
         )}
+      </div>
 
         {/* Design-aid guides — horizontal/vertical lines drawn over the
             canvas. Not layers / not exported to the watch. */}
@@ -788,6 +540,14 @@ function LayerList() {
         target={fontTarget}
         onClose={() => setFontTarget(null)}
       />
+
+      {insertModalType && (
+        <InsertLayerModal
+          k={insertModalType}
+          onClose={() => setInsertModalType(null)}
+          onOpenFontTarget={setFontTarget}
+        />
+      )}
     </aside>
   )
 }
