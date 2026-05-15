@@ -2,6 +2,8 @@
 
 A web-based visual editor for designing smartwatch faces compatible with the **Da Fit / MoYoung** ecosystem. Import an existing `.bin`, swap assets, retouch positions, regenerate digits from a font, and export a watch-ready binary — without ever touching a hex editor.
 
+🌐 **Live:** [dafit-canvas.elabins.com](https://dafit-canvas.elabins.com/) · no install needed, runs entirely in the browser.
+
 <!-- TODO: replace with a real hero screenshot of the editor -->
 
 ![DaFit Canvas — editor](public/og-image.svg)
@@ -10,13 +12,26 @@ A web-based visual editor for designing smartwatch faces compatible with the **D
 
 ## Features
 
+### Editor
 - **Import & decode** real Type C `.bin` files (`fileID 0x81`, `faceNumber 50001`, RGB565 little-endian) and the alternative FaceN format.
-- **Layer-based editor** with a live 240×240 canvas, drag-to-position, and per-layer properties.
+- **Layer-based editor** with a live 240×240 canvas, drag-to-position, click-to-select, marquee select, and per-layer properties.
+- **Multi-select + align / distribute** with a relative-to selector (selection / canvas / first item) — works on layers and on user guide lines.
+- **Guide lines + smart guides + snapping** — drag horizontal / vertical guides onto the canvas, get real-time alignment indicators while dragging, and snap to guides, canvas edges/center, or other layers' edges/centers.
+- **Animation support** — `TAP_TO_CHANGE`, `ANIMATION`, `ANIMATION_F8` with project-wide `animationFrames`, frame-batch BMP import, separate auto vs tap playback controls, configurable preview FPS.
 - **Shared asset library** — multiple layers can point at the same bitmap set (the way the firmware actually packs digits, weekday strings, progress bars, etc.).
-- **Font-to-digits generator** — drop in any TTF/OTF or pick a system font and generate a 10-glyph digit set (or a 7-glyph weekday set) at the exact pixel dimensions the watch expects.
-- **MoYoung face browser** — search and preview the official catalogue, download `.bin`s straight into the editor.
+- **Font-to-glyphs generator** — pick from system fonts, paste a Google Fonts embed (full CSS2 URL with weights / italics), or upload a TTF / OTF. Per-slot text override for multi-slot kinds so you can switch `Jan/Feb` → `JAN/FEB` or to translated names.
+- **Built-in BMP pixel editor** — pencil, eraser, bucket, eyedropper. Edit any slot in place; round-trip-safe (preserves per-slot compression hints).
+- **Import assets from another watchface** — pull individual asset sets out of any `.bin` / `.zip` and into your current project.
+- **Undo / redo** with Cmd/Ctrl-Z + coalescing for drag and keystroke runs.
 - **Round-trip safe** — per-blob compression (RLE_LINE vs raw) is preserved on import/export, so re-saving a working face never breaks it on the watch.
-- **Pack / Dump pages** — a low-level workbench for inspecting blobs, repacking, and exporting back to `.bin`.
+
+### Pages
+- **`/editor`** — the main visual editor.
+- **`/watch-faces`** — browse the MoYoung catalogue, search by category, download `.bin`s.
+- **`/upload`** — direct Web Bluetooth flash to the watch (no external uploader).
+- **`/console`** — BLE playground: find-my-watch, send notifications, sync time, weather, trigger HR / SpO2 / BP measurements, custom step goal, real-time event log of every packet to / from the watch.
+- **`/pack`**, **`/dump`** — low-level workbench for inspecting blobs and repacking.
+- **`/docs`** — in-app explanation of the Type C binary format.
 
 <!-- TODO: replace with a screenshot of the layer list + canvas -->
 
@@ -47,6 +62,10 @@ The editor includes a built-in **Upload** page that talks to the watch over Web 
 ---
 
 ## Quick start
+
+**Just want to use it?** Open [dafit-canvas.elabins.com](https://dafit-canvas.elabins.com/) in Chrome or Edge (Web Bluetooth requires a Chromium browser).
+
+**Running locally / contributing:**
 
 ```bash
 git clone https://github.com/e-labInnovations/DaFit-Canvas.git
