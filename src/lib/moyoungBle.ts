@@ -87,27 +87,28 @@ export class MoyoungWatch {
     device.addEventListener('gattserverdisconnected', this.handleDisconnect)
     const server = await device.gatt.connect()
 
-    const [info, battery, moyoung] = await Promise.all([
-      server.getPrimaryService(DEVINFO_SERVICE),
-      server.getPrimaryService(BATTERY_SERVICE),
-      server.getPrimaryService(MOYOUNG_SERVICE),
-    ])
+    // Android Chrome's BLE stack serializes GATT operations strictly —
+    // issuing multiple `getPrimaryService` / `getCharacteristic` /
+    // `readValue` calls in parallel via `Promise.all` returns
+    // "GATT operation failed for unknown reason" on the second one.
+    // Desktop Chrome tolerates concurrent reads, but the safe baseline
+    // (and what the spec actually requires of implementations) is
+    // sequential `await`s — slightly slower on desktop, but identical
+    // behaviour across platforms.
+    const info = await server.getPrimaryService(DEVINFO_SERVICE)
+    const battery = await server.getPrimaryService(BATTERY_SERVICE)
+    const moyoung = await server.getPrimaryService(MOYOUNG_SERVICE)
 
-    const [manufacturerChar, softChar, batteryChar, send, sendFile, notify] =
-      await Promise.all([
-        info.getCharacteristic(MANUFACTURER_CHAR),
-        info.getCharacteristic(SOFTREV_CHAR),
-        battery.getCharacteristic(BATTERY_CHAR),
-        moyoung.getCharacteristic(SEND_CHAR),
-        moyoung.getCharacteristic(SENDFILE_CHAR),
-        moyoung.getCharacteristic(NOTIFY_CHAR),
-      ])
+    const manufacturerChar = await info.getCharacteristic(MANUFACTURER_CHAR)
+    const softChar = await info.getCharacteristic(SOFTREV_CHAR)
+    const batteryChar = await battery.getCharacteristic(BATTERY_CHAR)
+    const send = await moyoung.getCharacteristic(SEND_CHAR)
+    const sendFile = await moyoung.getCharacteristic(SENDFILE_CHAR)
+    const notify = await moyoung.getCharacteristic(NOTIFY_CHAR)
 
-    const [manufacturer, software, batteryValue] = await Promise.all([
-      manufacturerChar.readValue().then(decodeText),
-      softChar.readValue().then(decodeText),
-      batteryChar.readValue().then((v) => v.getUint8(0)),
-    ])
+    const manufacturer = decodeText(await manufacturerChar.readValue())
+    const software = decodeText(await softChar.readValue())
+    const batteryValue = (await batteryChar.readValue()).getUint8(0)
 
     if (manufacturer !== REQUIRED_MANUFACTURER) {
       device.gatt.disconnect()
